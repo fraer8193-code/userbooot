@@ -60,6 +60,7 @@ async def help_cmd(event: events.NewMessage.Event):
         "ramka": "🖼 **Frame / Рамка**",
         "afk": "💤 **AFK & Secret AI Clone**",
         "autotime": "🕐 **Auto Time / Время**",
+        "keepalive": "💓 **KeepAlive / 24/7**",
         "help": "🌸 **General**"
     }
 
