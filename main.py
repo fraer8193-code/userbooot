@@ -154,7 +154,12 @@ async def main():
         return
 
     logger.info("Initializing Telegram client...")
-    session_target = StringSession(SESSION_STRING) if SESSION_STRING else SESSION_NAME
+    if SESSION_STRING:
+        logger.info(f"[+] Using StringSession (length: {len(SESSION_STRING)} chars)")
+        session_target = StringSession(SESSION_STRING)
+    else:
+        logger.warning(f"[-] SESSION_STRING is empty or missing! Falling back to {SESSION_NAME}.session")
+        session_target = SESSION_NAME
     client = TelegramClient(session_target, API_ID, API_HASH)
 
     # Инициализация и регистрация менеджера модулей

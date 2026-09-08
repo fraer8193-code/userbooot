@@ -18,7 +18,10 @@ BOT_USERNAME = os.getenv("BOT_USERNAME", "MuInlineFemboy_bot")
 
 # Имя файла сессии Telethon или готовая строка сессии (для деплоя без файла .session)
 SESSION_NAME = os.getenv("SESSION_NAME", "userbot_session")
-SESSION_STRING = os.getenv("SESSION_STRING", "").strip()
+_raw_session_str = os.getenv("SESSION_STRING", "").strip()
+if _raw_session_str.startswith("SESSION_STRING="):
+    _raw_session_str = _raw_session_str.split("=", 1)[1].strip()
+SESSION_STRING = _raw_session_str.strip('"').strip("'").strip()
 
 # Префикс для команд бота (например, .ping, .help)
 CMD_PREFIX = os.getenv("CMD_PREFIX", ".")
