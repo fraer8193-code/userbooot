@@ -18,7 +18,6 @@ def ensure_dependencies():
         "colorama": "colorama",
         "dotenv": "python-dotenv",
         "aiohttp": "aiohttp",
-        "psutil": "psutil",
         "PIL": "pillow",
         "google.genai": "google-genai",
         "openai": "openai",
