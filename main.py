@@ -155,16 +155,41 @@ async def main():
         return
 
     logger.info("Initializing Telegram client...")
-    session_file = Path(f"{SESSION_NAME}.session")
-    if session_file.exists():
-        logger.info(f"[+] Found session file: {session_file.name} ({session_file.stat().st_size} bytes), using file session!")
-        session_target = SESSION_NAME
+    
+    # Поиск файла сессии в рабочей директории и /app/data
+    session_target = None
+    potential_dirs = [Path("."), Path("data"), Path("/app"), Path("/app/data")]
+    found_session_path = None
+
+    for pdir in potential_dirs:
+        if pdir.exists() and pdir.is_dir():
+            # Сначала проверяем точное имя
+            exact = pdir / f"{SESSION_NAME}.session"
+            if exact.exists() and exact.stat().st_size > 0:
+                found_session_path = exact
+                break
+            # Затем любой .session файл
+            for sfile in pdir.glob("*.session"):
+                if sfile.name != "bot_session.session" and sfile.stat().st_size > 0:
+                    found_session_path = sfile
+                    break
+        if found_session_path:
+            break
+
+    if found_session_path:
+        # Убираем расширение .session для Telethon
+        session_stem = str(found_session_path).replace("\\", "/")
+        if session_stem.endswith(".session"):
+            session_stem = session_stem[:-8]
+        logger.info(f"[+] Found session file: {found_session_path.name} at {found_session_path} ({found_session_path.stat().st_size} bytes), using it!")
+        session_target = session_stem
     elif SESSION_STRING:
         logger.info(f"[+] Using StringSession (length: {len(SESSION_STRING)} chars)")
         session_target = StringSession(SESSION_STRING)
     else:
-        logger.warning(f"[-] No session file found and SESSION_STRING is empty! Falling back to {SESSION_NAME}.session")
+        logger.warning(f"[-] No session file found in {[str(d) for d in potential_dirs]} and SESSION_STRING is empty!")
         session_target = SESSION_NAME
+
     client = TelegramClient(session_target, API_ID, API_HASH)
 
     # Инициализация и регистрация менеджера модулей
