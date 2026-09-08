@@ -26,5 +26,8 @@ SESSION_STRING = _raw_session_str.strip('"').strip("'").strip()
 # Префикс для команд бота (например, .ping, .help)
 CMD_PREFIX = os.getenv("CMD_PREFIX", ".")
 
+# Gemini API Key (fallback по умолчанию)
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6KrYZ_nCYrwwisUq-3rea59jvKHbVzFC5ygX6Ziq90KKw")
+
 # Версия юзербота
 BOT_VERSION = "1.0.0"

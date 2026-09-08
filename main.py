@@ -2,6 +2,7 @@ import os
 import sys
 import subprocess
 import logging
+from pathlib import Path
 
 # Обеспечиваем корректную работу UTF-8 в консоли Windows
 if sys.platform == "win32":
@@ -154,11 +155,15 @@ async def main():
         return
 
     logger.info("Initializing Telegram client...")
-    if SESSION_STRING:
+    session_file = Path(f"{SESSION_NAME}.session")
+    if session_file.exists():
+        logger.info(f"[+] Found session file: {session_file.name} ({session_file.stat().st_size} bytes), using file session!")
+        session_target = SESSION_NAME
+    elif SESSION_STRING:
         logger.info(f"[+] Using StringSession (length: {len(SESSION_STRING)} chars)")
         session_target = StringSession(SESSION_STRING)
     else:
-        logger.warning(f"[-] SESSION_STRING is empty or missing! Falling back to {SESSION_NAME}.session")
+        logger.warning(f"[-] No session file found and SESSION_STRING is empty! Falling back to {SESSION_NAME}.session")
         session_target = SESSION_NAME
     client = TelegramClient(session_target, API_ID, API_HASH)
 

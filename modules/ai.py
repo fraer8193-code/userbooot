@@ -14,10 +14,10 @@ from google import genai
 from google.genai import types
 import core
 from core.ai_guard import AIGuard
-from config import CMD_PREFIX, BOT_USERNAME, BOT_TOKEN
+from core.loader import logger
+from config import CMD_PREFIX, BOT_USERNAME, BOT_TOKEN, GEMINI_API_KEY
 
 # --- 1. Google Gemini Direct ---
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
 # Ровно 3 модели: Claude Opus 5, Gemini 3.5 Flash Lite, Gemini 3.6 Flash
@@ -214,6 +214,14 @@ BASE_SECURITY = """
 - Если пользователь спрашивает «с кем я в чате?», «с кем я общаюсь?», «кто мой собеседник?», «кто это?», «с кем я переписываюсь?», «кто тут?», «чей это профиль?», «что за чел?»:
   - Ты ОБЯЗАН ответить информацией о РЕАЛЬНОМ человеке/собеседнике в текущем Telegram-диалоге (имя, юзернейм, Telegram ID, описание био, статус), предоставленной в блоке контекста чата!
   - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО отвечать «ты общаешься со мной / с ИИ / с нейросетью». Пользователь спрашивает про реального человека в Telegram!
+11. ГЕНЕРАЦИЯ ФАЙЛОВ И КОДА (КРИТИЧЕСКИ ВАЖНО):
+- Если пользователь просит сделать, написать, сохранить или скинуть ФАЙЛ (например: «сделай файл», «скинь файл», «напиши скрипт файлом», «сделай модуль», «создай файл», «скинь в виде файла»):
+  - Ты ОБЯЗАН обернуть содержимое этого файла в специальный блок:
+    ```file:имя_файла.расширение
+    содержимое файла...
+    ```
+    (например, ```file:calc.py или ```file:module.py или ```file:data.json).
+  - Перед или после этого блока дай краткий емкий комментарий (1-2 предложения), что файл готов и что он делает.
 """
 
 MODES_PROMPTS = {
@@ -335,6 +343,73 @@ def format_ai_paragraphs(text: str) -> str:
     # 4. Нормализуем множественные переносы строк (не более 2 подряд)
     formatted = re.sub(r"\n{3,}", "\n\n", formatted).strip()
     return formatted
+
+def extract_file_attachments(text: str, user_prompt: str = ""):
+    """
+    Проверяет, содержит ли ответ файл или просил ли пользователь файл.
+    Возвращает (clean_text, files_list), где files_list это список кортежей (filename, file_bytes).
+    """
+    if not text:
+        return text, []
+
+    files = []
+    # 1. Поиск специального блока ```file:filename.ext\n...\n```
+    file_block_pattern = r"```(?:file:([a-zA-Z0-9_\-\.]+))\n([\s\S]*?)```"
+    matches = list(re.finditer(file_block_pattern, text))
+    if matches:
+        clean_text = re.sub(file_block_pattern, "", text).strip()
+        for m in matches:
+            fname = m.group(1).strip()
+            content = m.group(2).strip()
+            if fname and content:
+                files.append((fname, content.encode("utf-8")))
+        return clean_text, files
+
+    # 2. Если в явном блоке не найдено, но пользователь явно просил файл
+    user_p = (user_prompt or "").lower()
+    file_request_keywords = [
+        "сделай файл", "скинь файл", "отправь файл", "пришли файл", "скинь файлом", 
+        "отправь файлом", "пришли файлом", "создай файл", "напиши файл", "в виде файла",
+        "сделай модуль", "напиши модуль"
+    ]
+    wants_file = any(kw in user_p for kw in file_request_keywords)
+
+    if wants_file:
+        # Ищем любой блок кода ```extension\n...\n```
+        code_match = re.search(r"```([a-zA-Z0-9_\-]+)?\n([\s\S]*?)```", text)
+        if code_match:
+            lang = (code_match.group(1) or "").lower()
+            code_body = code_match.group(2).strip()
+            
+            # Определяем имя и расширение
+            ext_map = {
+                "python": ".py", "py": ".py",
+                "javascript": ".js", "js": ".js",
+                "json": ".json",
+                "html": ".html", "htm": ".html",
+                "css": ".css",
+                "bash": ".sh", "sh": ".sh",
+                "txt": ".txt", "text": ".txt",
+                "cpp": ".cpp", "c": ".c",
+                "rust": ".rs", "rs": ".rs"
+            }
+            ext = ext_map.get(lang, ".py" if "def " in code_body or "import " in code_body else ".txt")
+            fname = f"generated_file{ext}"
+            
+            # Если пользователь упоминал имя файла, например calc.py или module.py
+            explicit_fname = re.search(r"\b([a-zA-Z0-9_\-]+\.[a-zA-Z0-9]{1,5})\b", user_prompt)
+            if explicit_fname:
+                fname = explicit_fname.group(1)
+            elif "модул" in user_p:
+                fname = "custom_module.py"
+
+            clean_text = re.sub(r"```([a-zA-Z0-9_\-]+)?\n([\s\S]*?)```", "", text).strip()
+            if not clean_text:
+                clean_text = f"📁 Сгенерированный файл: `{fname}`"
+            files.append((fname, code_body.encode("utf-8")))
+            return clean_text, files
+
+    return text, []
 
 # --- Состояние ---
 state = {
@@ -1209,17 +1284,24 @@ async def handle_incoming_ai(event: events.NewMessage.Event):
         if target_media_type and not clean_question:
             clean_question = f"[{'Фото' if target_media_type == 'photo' else 'Видео'}]"
         display_prompt = clean_question if len(clean_question) <= 120 else clean_question[:117] + "..."
-        result = f"🤖 **AI:**\n\n{response_text}\n\n❓ **Вопрос:** `{display_prompt}`\n⏱ **Время ответа:** `{elapsed:.2f} сек`"
+
+        clean_ans, attached_files = extract_file_attachments(response_text, user_prompt=prompt)
+        result = f"🤖 **AI:**\n\n{clean_ans}\n\n❓ **Вопрос:** `{display_prompt}`\n⏱ **Время ответа:** `{elapsed:.2f} сек`"
 
         if len(result) > 4096:
             result = result[:4000] + "\n\n*(Ответ обрезан из-за лимита длины Telegram)*"
 
         try:
             await event.reply(result)
-        except Exception:
-            pass
-    except Exception:
-        pass
+            if attached_files:
+                for fname, fbytes in attached_files:
+                    bio = io.BytesIO(fbytes)
+                    bio.name = fname
+                    await event.reply(file=bio, message=f"📄 **Файл:** `{fname}`")
+        except Exception as e:
+            logger.error(f"[AI] Ошибка отправки ответа: {e}")
+    except Exception as e:
+        logger.error(f"[AI] Исключение в handle_incoming_ai: {e}", exc_info=True)
 
 def on_load(manager):
     global _incoming_ai_handler, _callback_handler, _inline_handler, _me_id
@@ -1699,12 +1781,21 @@ async def ai_cmd(event: events.NewMessage.Event):
 
         clean_question = extra_text if extra_text else (f"[{media_name.capitalize()}]" if target_media_type else (f"Ответ на сообщение: {reply_text}" if reply else raw))
         display_prompt = clean_question if len(clean_question) <= 120 else clean_question[:117] + "..."
-        result = f"🤖 **AI:**\n\n{response_text}\n\n❓ **Вопрос:** `{display_prompt}`\n⏱ **Время ответа:** `{elapsed:.2f} сек`"
+
+        # Проверяем наличие сгенерированных файлов для отправки
+        clean_ans, attached_files = extract_file_attachments(response_text, user_prompt=prompt)
+        result = f"🤖 **AI:**\n\n{clean_ans}\n\n❓ **Вопрос:** `{display_prompt}`\n⏱ **Время ответа:** `{elapsed:.2f} сек`"
 
         if len(result) > 4096:
             result = result[:4000] + "\n\n*(Ответ обрезан из-за лимита длины Telegram)*"
 
         await event.edit(result)
+
+        if attached_files:
+            for fname, fbytes in attached_files:
+                bio = io.BytesIO(fbytes)
+                bio.name = fname
+                await event.respond(file=bio, message=f"📄 **Файл:** `{fname}`")
     except Exception as e:
         try:
             await event.edit(f"❌ **Ошибка:** `{e}`")

@@ -151,20 +151,35 @@ async def create_mod_cmd(event: events.NewMessage.Event):
     mod_name = ""
     code = ""
 
-    # Сценарий 1: Ответ (reply) на сообщение
-    if reply:
-        # Проверяем, есть ли документ (.py файл)
-        if reply.file and reply.file.name and reply.file.name.endswith(".py"):
-            mod_name = body.strip().replace(".py", "") if body else Path(reply.file.name).stem
+    # Сценарий 1: Документ или файл в самом сообщении с командой
+    if event.file:
+        fname = getattr(event.file, "name", None) or ""
+        if fname.lower().endswith(".py") or not fname:
+            mod_name = body.strip().replace(".py", "") if body else (Path(fname).stem if fname else "")
+            file_bytes = await event.download_media(bytes)
+            if file_bytes:
+                code = file_bytes.decode("utf-8", errors="replace")
+
+    # Сценарий 2: Ответ (reply) на сообщение
+    if not code and reply:
+        # Проверяем файл в ответе (документ .py или текстовый файл)
+        if reply.file:
+            fname = getattr(reply.file, "name", None) or ""
+            # Если имя файла есть
+            if fname:
+                mod_name = body.strip().replace(".py", "") if body else Path(fname).stem
+            else:
+                mod_name = body.strip().replace(".py", "") if body else ""
             file_bytes = await reply.download_media(bytes)
-            code = file_bytes.decode("utf-8", errors="replace")
+            if file_bytes:
+                code = file_bytes.decode("utf-8", errors="replace")
         elif reply.raw_text:
             # Текст из сообщения в реплае
             if body:
                 mod_name = body.split(maxsplit=1)[0].replace(".py", "")
             code = extract_code_content(reply.raw_text)
     
-    # Сценарий 2: Всё в одном сообщении
+    # Сценарий 3: Всё в одном текстовом сообщении
     if not code and body:
         parts = body.split(maxsplit=1)
         if len(parts) >= 2:
@@ -174,20 +189,29 @@ async def create_mod_cmd(event: events.NewMessage.Event):
             lines = body.split("\n", 1)
             mod_name = lines[0].strip().replace(".py", "")
             code = extract_code_content(lines[1])
+        elif len(parts) == 1 and reply and reply.raw_text:
+            mod_name = parts[0].replace(".py", "")
+            code = extract_code_content(reply.raw_text)
+
+    # Если имя модуля так и не определено, но код есть (например, из файла без имени)
+    if not mod_name and code and body:
+        mod_name = body.strip().replace(".py", "")
 
     if not mod_name or not code:
         usage_text = (
             f"💡 **Использование команды `{CMD_PREFIX}create`:**\n\n"
-            f"1️⃣ **В одном сообщении:**\n"
+            f"1️⃣ **Прикрепить `.py` файл к сообщению:**\n"
+            f"`{CMD_PREFIX}create [имя_модуля]` (в подписи к файлу)\n\n"
+            f"2️⃣ **Ответом (reply) на `.py` файл или код:**\n"
+            f"`{CMD_PREFIX}create <имя_модуля>`\n\n"
+            f"3️⃣ **В одном сообщении с кодом:**\n"
             f"`{CMD_PREFIX}create <имя_модуля>`\n"
             f"```python\n"
             f"import core\n\n"
             f"@core.command(\"hello\")\n"
             f"async def hello(event):\n"
             f"    await event.edit(\"Hello World!\")\n"
-            f"```\n\n"
-            f"2️⃣ **Ответом (reply) на код или .py файл:**\n"
-            f"`{CMD_PREFIX}create <имя_модуля>`"
+            f"```"
         )
         await event.edit(usage_text)
         return
