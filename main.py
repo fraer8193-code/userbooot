@@ -14,15 +14,15 @@ if sys.platform == "win32":
 # --- Функция авто-проверки и установки зависимостей для Bothost.ru и локального ПК ---
 def ensure_dependencies():
     packages = {
-        "telethon": "telethon>=1.36.0",
-        "colorama": "colorama>=0.4.6",
-        "dotenv": "python-dotenv>=1.0.0",
-        "aiohttp": "aiohttp>=3.9.0",
-        "psutil": "psutil>=5.9.0",
-        "PIL": "pillow>=10.0.0",
-        "google.genai": "google-genai>=0.1.0",
-        "openai": "openai>=1.0.0",
-        "requests": "requests>=2.31.0"
+        "telethon": "telethon",
+        "colorama": "colorama",
+        "dotenv": "python-dotenv",
+        "aiohttp": "aiohttp",
+        "psutil": "psutil",
+        "PIL": "pillow",
+        "google.genai": "google-genai",
+        "openai": "openai",
+        "requests": "requests"
     }
     missing_pip = []
     

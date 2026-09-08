@@ -1,7 +1,10 @@
 import os
 import sys
 import time
-import psutil
+try:
+    import psutil
+except ImportError:
+    psutil = None
 import platform
 from pathlib import Path
 from telethon import events
