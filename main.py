@@ -85,8 +85,9 @@ except ImportError:
     Style = _DummyColor()
 
 from telethon import TelegramClient
+from telethon.sessions import StringSession
 import core
-from config import API_ID, API_HASH, SESSION_NAME, CMD_PREFIX, BOT_VERSION, MODULES_DIR, BOT_TOKEN, BOT_USERNAME
+from config import API_ID, API_HASH, SESSION_NAME, SESSION_STRING, CMD_PREFIX, BOT_VERSION, MODULES_DIR, BOT_TOKEN, BOT_USERNAME
 
 # Инициализация colorama
 init(autoreset=True)
@@ -153,7 +154,8 @@ async def main():
         return
 
     logger.info("Initializing Telegram client...")
-    client = TelegramClient(SESSION_NAME, API_ID, API_HASH)
+    session_target = StringSession(SESSION_STRING) if SESSION_STRING else SESSION_NAME
+    client = TelegramClient(session_target, API_ID, API_HASH)
 
     # Инициализация и регистрация менеджера модулей
     mgr = core.ModuleManager(client)
@@ -189,7 +191,17 @@ async def main():
             bot_client = None
 
     logger.info("Connecting to Telegram user account...")
-    await client.start()
+    try:
+        await client.start()
+    except EOFError:
+        logger.error(
+            "Не удалось войти в аккаунт: сессия не авторизована, а ввод с клавиатуры недоступен (контейнер/сервер).\n"
+            "Решение:\n"
+            "1. Запустите скрипт export_session.py на компьютере, чтобы получить SESSION_STRING.\n"
+            "2. Укажите переменную окружения SESSION_STRING на сервере (в .env или настройках хостинга).\n"
+            "Либо скопируйте файл userbot_session.session на сервер."
+        )
+        return
     
     me = await client.get_me()
     first_name = me.first_name or "User"

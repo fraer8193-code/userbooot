@@ -16,8 +16,9 @@ API_HASH = os.getenv("API_HASH", "6b132e982dcc6c1fbebc51d7d10793e9")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8951677161:AAE4OwQNfrUIiS-MI9_gWUyJ32tM5bH2d2Y")
 BOT_USERNAME = os.getenv("BOT_USERNAME", "MuInlineFemboy_bot")
 
-# Имя файла сессии Telethon
+# Имя файла сессии Telethon или готовая строка сессии (для деплоя без файла .session)
 SESSION_NAME = os.getenv("SESSION_NAME", "userbot_session")
+SESSION_STRING = os.getenv("SESSION_STRING", "").strip()
 
 # Префикс для команд бота (например, .ping, .help)
 CMD_PREFIX = os.getenv("CMD_PREFIX", ".")
