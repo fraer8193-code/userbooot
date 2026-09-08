@@ -26,8 +26,11 @@ SESSION_STRING = _raw_session_str.strip('"').strip("'").strip()
 # Префикс для команд бота (например, .ping, .help)
 CMD_PREFIX = os.getenv("CMD_PREFIX", ".")
 
-# Gemini API Key (fallback по умолчанию)
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6KrYZ_nCYrwwisUq-3rea59jvKHbVzFC5ygX6Ziq90KKw")
+# Gemini API Key (fallback по умолчанию с очисткой кавычек и пробелов)
+_raw_gemini_key = os.getenv("GEMINI_API_KEY", "AQ.Ab8RN6KrYZ_nCYrwwisUq-3rea59jvKHbVzFC5ygX6Ziq90KKw").strip()
+if _raw_gemini_key.startswith("GEMINI_API_KEY="):
+    _raw_gemini_key = _raw_gemini_key.split("=", 1)[1].strip()
+GEMINI_API_KEY = _raw_gemini_key.strip('"').strip("'").strip()
 
 # Версия юзербота
 BOT_VERSION = "1.0.0"

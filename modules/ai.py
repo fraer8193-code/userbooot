@@ -1056,10 +1056,13 @@ async def generate_ai_response(user_id: int, user_name: str, sanitized_prompt: s
                 return answer
         except Exception as e:
             last_error = str(e)
+            logger.warning(f"[AI] Модель {provider}:{m_name} вернула ошибку: {last_error}")
             continue
 
     if last_error and ("429" in last_error or "RESOURCE_EXHAUSTED" in last_error or "quota" in last_error.lower()):
         return "⏳ **Лимит запросов исчерпан.** Пожалуйста, подождите 15–30 секунд."
+    if last_error and ("401" in last_error or "API_KEY_INVALID" in last_error or "Unauthorized" in last_error):
+        return f"❌ **Ошибка API-ключа Gemini:** `{last_error}`\n💡 Проверьте переменную `GEMINI_API_KEY` в настройках хостинга."
     return f"❌ **Ошибка нейросети:** `{last_error}`"
 
 # ==========================================
