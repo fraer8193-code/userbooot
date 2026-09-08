@@ -4,11 +4,18 @@ import subprocess
 import logging
 from pathlib import Path
 
-# Обеспечиваем корректную работу UTF-8 в консоли Windows
+# Обеспечиваем немедленный вывод логов в консоль Docker/Bothost без буферизации
+os.environ["PYTHONUNBUFFERED"] = "1"
 if sys.platform == "win32":
     try:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+else:
+    try:
+        sys.stdout.reconfigure(line_buffering=True)
+        sys.stderr.reconfigure(line_buffering=True)
     except Exception:
         pass
 
