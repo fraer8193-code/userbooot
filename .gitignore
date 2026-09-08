@@ -1,0 +1,40 @@
+# Виртуальное окружение
+.venv/
+venv/
+env/
+ENV/
+
+# Python кэш
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# СЕССИИ TELEGRAM И СЕКРЕТЫ
+*.session
+*.session-journal
+.env
+.restart_state
+
+# Куки и кэш авторизаций
+*_cookies.txt
+*cookies*.txt
+tiktok_session.json
+temp_browser_data/
+temp_media/
+
+# Личные дампы переписок и состояния
+result.json
+afk_state.json
+ai_state.json
+dmess_state.json
+geo_settings.json
+autotime_settings.json
+muted_users.json
+
+# IDE и системные файлы
+.vscode/
+.idea/
+*.swp
+Thumbs.db
+Desktop.ini
