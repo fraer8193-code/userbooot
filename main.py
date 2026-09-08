@@ -33,21 +33,57 @@ def ensure_dependencies():
             
     if missing_pip:
         print(f"[*] [Bothost.ru] Missing dependencies detected: {', '.join(missing_pip)}")
+        
+        # 1. Проверяем наличие pip, если нет — устанавливаем автоматически
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except Exception:
+            print("[*] [Bothost.ru] pip is missing in container. Bootstrapping pip...")
+            try:
+                import ensurepip
+                ensurepip.bootstrap()
+            except Exception:
+                try:
+                    import urllib.request
+                    import tempfile
+                    get_pip_file = os.path.join(tempfile.gettempdir(), "get-pip.py")
+                    urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", get_pip_file)
+                    subprocess.check_call([sys.executable, get_pip_file, "--no-warn-script-location"])
+                except Exception as e:
+                    print(f"[!] [Bothost.ru] Could not bootstrap pip: {e}")
+
+        # 2. Устанавливаем зависимости
         print("[*] [Bothost.ru] Installing dependencies automatically via pip...")
         try:
             req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
+            install_cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir"]
             if os.path.exists(req_file):
-                subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_file])
+                subprocess.check_call(install_cmd + ["-r", req_file])
             else:
-                subprocess.check_call([sys.executable, "-m", "pip", "install", *missing_pip])
+                subprocess.check_call(install_cmd + missing_pip)
             print("[+] [Bothost.ru] All dependencies installed successfully!\n")
+            
+            import site
+            import importlib
+            importlib.invalidate_caches()
         except Exception as e:
             print(f"[!] [Bothost.ru] Warning during pip install: {e}")
 
 ensure_dependencies()
 
 import asyncio
-from colorama import init, Fore, Style
+
+# Безопасная инициализация colorama (не падать, если отсутствует)
+try:
+    from colorama import init, Fore, Style
+    init(autoreset=True)
+except ImportError:
+    class _DummyColor:
+        def __getattr__(self, name):
+            return ""
+    Fore = _DummyColor()
+    Style = _DummyColor()
+
 from telethon import TelegramClient
 import core
 from config import API_ID, API_HASH, SESSION_NAME, CMD_PREFIX, BOT_VERSION, MODULES_DIR, BOT_TOKEN, BOT_USERNAME
