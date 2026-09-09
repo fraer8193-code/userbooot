@@ -251,14 +251,30 @@ async def create_mod_cmd(event: events.NewMessage.Event):
     if success:
         mod_info = mgr.modules.get(mod_name)
         cmds = list(mod_info.commands.keys()) if mod_info else []
-        cmd_str = ", ".join(f"`{CMD_PREFIX}{c}`" for c in cmds) if cmds else "*(команды не зарегистрированы)*"
-        
-        await event.edit(
-            f"✨ **Модуль `{mod_name}` успешно создан и активирован!**\n\n"
-            f"📁 **Файл:** `modules/{mod_name}.py`\n"
-            f"⚡ **Команды:** {cmd_str}\n"
-            f"💡 Удалить модуль: `{CMD_PREFIX}dell {mod_name}`"
-        )
+        if cmds:
+            cmd_str = ", ".join(f"`{CMD_PREFIX}{c}`" for c in cmds)
+            await event.edit(
+                f"✨ **Модуль `{mod_name}` успешно создан и активирован!**\n\n"
+                f"📁 **Файл:** `modules/{mod_name}.py`\n"
+                f"⚡ **Команды:** {cmd_str}\n"
+                f"💡 Удалить модуль: `{CMD_PREFIX}dell {mod_name}`"
+            )
+        else:
+            await event.edit(
+                f"⚠️ **Модуль `{mod_name}` сохранен, но команды не найдены!**\n\n"
+                f"📁 **Файл:** `modules/{mod_name}.py`\n\n"
+                f"❓ **Причина:**\n"
+                f"В коде нет зарегистрированных команд. Для юзербота функция команды должна быть помечена декоратором `@core.command(\"имя\")` или называться `cmd_<имя>(event)`.\n\n"
+                f"💡 **Пример правильного модуля:**\n"
+                f"```python\n"
+                f"from telethon import events\n"
+                f"import core\n\n"
+                f"@core.command(\"{mod_name}\")\n"
+                f"async def {mod_name}_cmd(event: events.NewMessage.Event):\n"
+                f"    await event.edit(\"Команда работает!\")\n"
+                f"```\n\n"
+                f"💡 Удалить этот файл: `{CMD_PREFIX}dell {mod_name}`"
+            )
     else:
         # Если загрузка не удалась, сообщаем подробности
         await event.edit(

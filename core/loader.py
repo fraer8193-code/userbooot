@@ -10,6 +10,16 @@ from config import CMD_PREFIX, MODULES_DIR
 
 logger = logging.getLogger("Userbot.Loader")
 
+def command(name: str, description: str = "", usage: str = ""):
+    """Глобальный декоратор для регистрации команды."""
+    def decorator(func: Callable):
+        func._is_userbot_command = True
+        func._cmd_name = name.lower().lstrip(".")
+        func._cmd_desc = description or (inspect.getdoc(func) or "").strip()
+        func._cmd_usage = usage or f"{CMD_PREFIX}{func._cmd_name}"
+        return func
+    return decorator
+
 class CommandInfo:
     def __init__(self, name: str, func: Callable, description: str = "", usage: str = ""):
         self.name = name
@@ -30,24 +40,42 @@ class ModuleManager:
         self.modules: Dict[str, ModuleInfo] = {}
 
     def command(self, name: str, description: str = "", usage: str = ""):
-        """Декоратор для регистрации команды."""
-        def decorator(func: Callable):
-            func._is_userbot_command = True
-            func._cmd_name = name.lower()
-            func._cmd_desc = description
-            func._cmd_usage = usage
-            return func
-        return decorator
+        """Декоратор для регистрации команды через экземпляр менеджера."""
+        return command(name, description, usage)
 
     def register_module_handlers(self, mod_info: ModuleInfo):
         """Сканирует модуль на команды и регистрирует их в Telethon."""
         for attr_name in dir(mod_info.module_obj):
             attr = getattr(mod_info.module_obj, attr_name)
-            if callable(attr) and getattr(attr, "_is_userbot_command", False):
+            if not callable(attr):
+                continue
+
+            cmd_name = None
+            desc = ""
+            usage = ""
+
+            # 1. Явная регистрация через @core.command
+            if getattr(attr, "_is_userbot_command", False):
                 cmd_name = attr._cmd_name
-                desc = attr._cmd_desc
-                usage = attr._cmd_usage
-                
+                desc = getattr(attr, "_cmd_desc", "")
+                usage = getattr(attr, "_cmd_usage", "")
+
+            # 2. Автоопределение функций вида cmd_<name> или <name>_cmd
+            elif not attr_name.startswith("_"):
+                try:
+                    sig = inspect.signature(attr)
+                    if "event" in sig.parameters or len(sig.parameters) >= 1:
+                        if attr_name.startswith("cmd_") and len(attr_name) > 4:
+                            cmd_name = attr_name[4:].lower()
+                        elif attr_name.endswith("_cmd") and len(attr_name) > 4:
+                            cmd_name = attr_name[:-4].lower()
+                        if cmd_name:
+                            desc = inspect.getdoc(attr) or f"Команда {cmd_name}"
+                            usage = f"{CMD_PREFIX}{cmd_name}"
+                except Exception:
+                    pass
+
+            if cmd_name:
                 cmd_info = CommandInfo(name=cmd_name, func=attr, description=desc, usage=usage)
                 mod_info.commands[cmd_name] = cmd_info
 
@@ -58,7 +86,8 @@ class ModuleManager:
                 handler_wrapper = self._create_wrapper(attr, cmd_name)
                 event_filter = events.NewMessage(outgoing=True, pattern=pattern)
                 
-                self.client.add_event_handler(handler_wrapper, event_filter)
+                if self.client:
+                    self.client.add_event_handler(handler_wrapper, event_filter)
                 mod_info.handlers.append((handler_wrapper, event_filter))
                 logger.info(f"Registered command: {CMD_PREFIX}{cmd_name} (module: {mod_info.name})")
 
