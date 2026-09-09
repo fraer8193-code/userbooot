@@ -26,11 +26,21 @@ SESSION_STRING = _raw_session_str.strip('"').strip("'").strip()
 # Префикс для команд бота (например, .ping, .help)
 CMD_PREFIX = os.getenv("CMD_PREFIX", ".")
 
-# Gemini API Key (очистка кавычек и пробелов)
-_raw_gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
-if _raw_gemini_key.startswith("GEMINI_API_KEY="):
-    _raw_gemini_key = _raw_gemini_key.split("=", 1)[1].strip()
-GEMINI_API_KEY = _raw_gemini_key.strip('"').strip("'").strip()
+# Gemini API Keys (поддержка одного или нескольких ключей через запятую)
+_raw_gemini_parts = []
+for _var in ("GEMINI_API_KEY", "GEMINI_API_KEYS"):
+    _val = os.getenv(_var, "").strip()
+    if _val.startswith(f"{_var}="):
+        _val = _val.split("=", 1)[1].strip()
+    if _val:
+        _raw_gemini_parts.append(_val)
+_combined_keys = ",".join(_raw_gemini_parts)
+GEMINI_API_KEYS = []
+for _k in _combined_keys.split(","):
+    _k_clean = _k.strip().strip('"').strip("'").strip()
+    if _k_clean and _k_clean not in GEMINI_API_KEYS:
+        GEMINI_API_KEYS.append(_k_clean)
+GEMINI_API_KEY = GEMINI_API_KEYS[0] if GEMINI_API_KEYS else ""
 
 # Версия юзербота
 BOT_VERSION = "1.0.0"

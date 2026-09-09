@@ -10,22 +10,46 @@ from google import genai
 from google.genai import types
 import core
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-_gemini_client = None
+def get_gemini_keys() -> list[str]:
+    keys = []
+    for var_name in ("GEMINI_API_KEY", "GEMINI_API_KEYS"):
+        val = os.getenv(var_name, "").strip()
+        if val:
+            for part in val.split(","):
+                k = part.strip().strip('"').strip("'").strip()
+                if k and k not in keys:
+                    keys.append(k)
+    try:
+        from config import GEMINI_API_KEYS as CFG_KEYS
+        for k in CFG_KEYS:
+            if k and k not in keys:
+                keys.append(k)
+    except Exception:
+        pass
+    return keys
 
-def get_gemini_client():
-    global _gemini_client
-    if not _gemini_client and GEMINI_API_KEY:
-        try:
-            _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        except Exception:
-            _gemini_client = None
-    return _gemini_client
+_nb_clients = {}
+
+def get_gemini_client(api_key: str | None = None):
+    global _nb_clients
+    if not api_key:
+        keys = get_gemini_keys()
+        if not keys:
+            return None
+        api_key = keys[0]
+    if api_key in _nb_clients:
+        return _nb_clients[api_key]
+    try:
+        client = genai.Client(api_key=api_key)
+        _nb_clients[api_key] = client
+        return client
+    except Exception:
+        return None
 
 def translate_and_enrich_prompt(ru_prompt: str) -> str:
-    """Переводит и детально обогащает промпт с русского на английский через Gemini Flash."""
-    client = get_gemini_client()
-    if not client:
+    """Переводит и детально обогащает промпт с русского на английский через Gemini Flash с пулом ключей."""
+    keys = get_gemini_keys()
+    if not keys:
         return ru_prompt
 
     system_instruction = """You are Nano Banana 2 Image Prompt Master.
@@ -33,27 +57,29 @@ Convert the user Russian prompt into a highly detailed, stunning, high-quality v
 Enhance details, lighting, aesthetics, atmosphere, and resolution.
 Output ONLY the final English prompt without any explanations, prefixes, or quotes."""
 
-    try:
-        config = types.GenerateContentConfig(
-            system_instruction=system_instruction,
-            temperature=0.7,
-            max_output_tokens=120,
-            automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
-        )
-        resp = None
-        for m in ["gemini-3.5-flash-lite", "gemini-flash-latest"]:
+    config = types.GenerateContentConfig(
+        system_instruction=system_instruction,
+        temperature=0.7,
+        max_output_tokens=120,
+        automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
+    )
+
+    for k in keys:
+        client = get_gemini_client(api_key=k)
+        if not client:
+            continue
+        for m in ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]:
             try:
                 resp = client.models.generate_content(model=m, contents=ru_prompt, config=config)
-                if resp and resp.text:
+                if resp and resp.text and resp.text.strip():
+                    text = resp.text.strip().replace('"', '').replace("'", "")
+                    return text if text else ru_prompt
+            except Exception as e:
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or "quota" in str(e).lower():
                     break
-            except Exception:
                 continue
-        if resp and resp.text:
-            text = resp.text.strip().replace('"', '').replace("'", "")
-            return text if text else ru_prompt
-        return ru_prompt
-    except Exception:
-        return ru_prompt
+    return ru_prompt
+
 
 def generate_image_bytes(en_prompt: str, timeout: float = 25.0) -> bytes:
     """Генерирует изображение высокого качества через Nano Banana 2 / FLUX."""

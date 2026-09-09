@@ -14,7 +14,7 @@ from google.genai import types
 import core
 from core.ai_guard import AIGuard
 from core.loader import logger
-from config import CMD_PREFIX, BOT_USERNAME, BOT_TOKEN, GEMINI_API_KEY
+from config import CMD_PREFIX, BOT_USERNAME, BOT_TOKEN, GEMINI_API_KEY, GEMINI_API_KEYS
 
 # --- Google Gemini Direct ---
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
@@ -38,32 +38,53 @@ AVAILABLE_MODES = {
 
 STATE_FILE = Path(__file__).parent.parent / "ai_state.json"
 
-_cached_gemini_key = None
-gemini_client = None
+_gemini_clients_cache = {}
 
-def get_gemini_client():
-    global gemini_client, _cached_gemini_key
+def get_gemini_keys() -> list[str]:
+    """Возвращает упорядоченный список всех доступных Gemini API ключей (основных и резервных)."""
     from dotenv import load_dotenv
     load_dotenv(override=False)
 
-    current_key = os.getenv("GEMINI_API_KEY", "").strip() or GEMINI_API_KEY
-    if current_key.startswith("GEMINI_API_KEY="):
-        current_key = current_key.split("=", 1)[1].strip()
-    current_key = current_key.strip('"').strip("'").strip()
+    keys = []
+    raw_parts = []
+    for var_name in ("GEMINI_API_KEY", "GEMINI_API_KEYS"):
+        val = os.getenv(var_name, "").strip()
+        if val.startswith(f"{var_name}="):
+            val = val.split("=", 1)[1].strip()
+        if val:
+            raw_parts.append(val)
+    combined = ",".join(raw_parts)
+    for part in combined.split(","):
+        k = part.strip().strip('"').strip("'").strip()
+        if k and k not in keys:
+            keys.append(k)
 
-    if not current_key:
+    if not keys and GEMINI_API_KEYS:
+        keys = list(GEMINI_API_KEYS)
+    elif not keys and GEMINI_API_KEY:
+        keys = [GEMINI_API_KEY]
+
+    return keys
+
+def get_gemini_client(api_key: str | None = None):
+    """Получает или создает экземпляр genai.Client для указанного или первого доступного API-ключа."""
+    global _gemini_clients_cache
+    if not api_key:
+        keys = get_gemini_keys()
+        if not keys:
+            return None
+        api_key = keys[0]
+
+    if api_key in _gemini_clients_cache:
+        return _gemini_clients_cache[api_key]
+
+    try:
+        client = genai.Client(api_key=api_key)
+        _gemini_clients_cache[api_key] = client
+        return client
+    except Exception as e:
+        logger.error(f"[AI] Ошибка инициализации Gemini Client для ключа {api_key[:10]}...: {e}")
         return None
-
-    if gemini_client is None or _cached_gemini_key != current_key:
-        try:
-            gemini_client = genai.Client(api_key=current_key)
-            _cached_gemini_key = current_key
-        except Exception as e:
-            logger.error(f"[AI] Ошибка инициализации Gemini Client: {e}")
-            gemini_client = None
-            _cached_gemini_key = None
-
-    return gemini_client
 
 def check_message_media_type(msg) -> str | None:
     """Определяет тип медиа в сообщении: 'photo', 'video' или None."""
@@ -944,9 +965,9 @@ def get_system_instruction(user_id: int, user_name: str, chat_info: str = "", is
 # 2. ВЫЗОВЫ МОДЕЛЕЙ GOOGLE GEMINI
 # ==========================================
 
-async def _call_gemini_direct(model_name: str, system_text: str, sanitized_prompt: str, history: list, media_item=None) -> str:
+async def _call_gemini_direct(model_name: str, system_text: str, sanitized_prompt: str, history: list, media_item=None, api_key: str | None = None) -> str:
     """Вызов Google Gemini Direct API с выбранной моделью (включая фото и видео)."""
-    cli = get_gemini_client()
+    cli = get_gemini_client(api_key=api_key)
     if not cli:
         raise RuntimeError("API-ключ Gemini не настроен. Укажите GEMINI_API_KEY в .env")
 
@@ -1012,9 +1033,10 @@ async def _call_gemini_direct(model_name: str, system_text: str, sanitized_promp
 async def generate_ai_response(user_id: int, user_name: str, sanitized_prompt: str, chat_info: str = "", is_owner: bool = False, media_item=None) -> str:
     """
     Генерация ответа:
-    1. Попытка вызова активной модели Gemini.
-    2. При наличии медиа (фото/видео) — поддержка мультимодальности Gemini.
-    3. При сбое автоматический переход на надежные резервные модели Gemini.
+    1. Перебор пула ключей Gemini (GEMINI_API_KEYS) с автоматическим переключением при 429 / исчерпании квоты.
+    2. Попытка вызова активной модели Gemini (gemini-3.5-flash-lite / gemini-3.6-flash).
+    3. Поддержка мультимодальности (фото/видео).
+    4. При сбое автоматический переход на резервные модели Gemini.
     """
     mode = state.get("current_mode", "default")
     current_model = state.get("current_model", DEFAULT_MODEL)
@@ -1030,9 +1052,11 @@ async def generate_ai_response(user_id: int, user_name: str, sanitized_prompt: s
         user_histories[history_key] = []
 
     history = user_histories[history_key]
-    last_error = None
 
-    # Порядок попыток моделей Gemini (включая резервную gemini-flash-latest при исчерпании квоты)
+    keys = get_gemini_keys()
+    if not keys:
+        return "❌ **Ошибка:** API-ключ Gemini не настроен. Укажите `GEMINI_API_KEY` в файле `.env`."
+
     candidate_order = [
         current_model,
         "gemini-3.6-flash" if current_model != "gemini-3.6-flash" else "gemini-3.5-flash-lite",
@@ -1043,26 +1067,32 @@ async def generate_ai_response(user_id: int, user_name: str, sanitized_prompt: s
         if m not in candidate_models:
             candidate_models.append(m)
 
-    for m_name in candidate_models:
-        try:
-            answer = await _call_gemini_direct(m_name, system_text, sanitized_prompt, history, media_item=media_item)
-            if answer and answer.strip():
-                history.append({"role": "user", "content": sanitized_prompt})
-                history.append({"role": "assistant", "content": answer})
-                return answer
-        except Exception as e:
-            last_error = str(e)
-            logger.warning(f"[AI] Модель {m_name} вернула ошибку: {last_error}")
-            continue
+    last_error = None
+    for k in keys:
+        for m_name in candidate_models:
+            try:
+                answer = await _call_gemini_direct(m_name, system_text, sanitized_prompt, history, media_item=media_item, api_key=k)
+                if answer and answer.strip():
+                    history.append({"role": "user", "content": sanitized_prompt})
+                    history.append({"role": "assistant", "content": answer})
+                    return answer
+            except Exception as e:
+                last_error = str(e)
+                logger.warning(f"[AI] Ключ ...{k[-6:]} и модель {m_name} вернули ошибку: {last_error}")
+                # При исчерпании квоты ключа (429) сразу переходим к следующему ключу из пула
+                if "429" in last_error or "RESOURCE_EXHAUSTED" in last_error or "quota" in last_error.lower():
+                    logger.info(f"[AI] Исчерпана квота на ключе ...{k[-6:]}, переключаемся на резервный ключ...")
+                    break
+                continue
 
     if last_error and ("429" in last_error or "RESOURCE_EXHAUSTED" in last_error or "quota" in last_error.lower()):
-        return "⏳ **Лимит запросов исчерпан.** Пожалуйста, подождите 15–30 секунд."
+        return "⏳ **Лимит запросов исчерпан на всех ключах.** Пожалуйста, подождите немного или добавьте новый ключ."
     if last_error and ("401" in last_error or "API_KEY_INVALID" in last_error or "Unauthorized" in last_error or "UNAUTHENTICATED" in last_error or "ACCESS_TOKEN_TYPE_UNSUPPORTED" in last_error):
         return (
             f"❌ **Ошибка API-ключа Gemini (401 Unauthorized):**\n`{last_error}`\n\n"
             "💡 **Как исправить:**\n"
-            "1. Получите бесплатный ключ на https://aistudio.google.com/app/apikey (он начинается с `AIzaSy...`).\n"
-            "2. Укажите его в переменной `GEMINI_API_KEY` в файле `.env` или настройках хостинга."
+            "1. Получите бесплатный ключ на https://aistudio.google.com/app/apikey (он начинается с `AIzaSy...` или `AQ.Ab8...`).\n"
+            "2. Укажите его в переменной `GEMINI_API_KEY` в файле `.env`."
         )
     return f"❌ **Ошибка нейросети:** `{last_error}`"
 

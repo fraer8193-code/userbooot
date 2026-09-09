@@ -305,21 +305,48 @@ def build_aiafk_prompt(reason: str) -> str:
 "Привет! Я ИИ-ассистент Rew. По твоему вопросу: [краткий ответ/помощь]. Напоминаю, что Rew сейчас отошел ({reason}) и ответит тебе лично, как только будет на связи! ✨"
 """
 
-_gemini_client = None
+_afk_clients = {}
 
-def get_gemini_client():
-    global _gemini_client
-    if _gemini_client is None and genai and GEMINI_API_KEY:
-        try:
-            _gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        except Exception as e:
-            logger.warning(f"Failed to init genai Client: {e}")
-            _gemini_client = None
-    return _gemini_client
+def get_afk_gemini_keys() -> list[str]:
+    keys = []
+    for var_name in ("GEMINI_API_KEY", "GEMINI_API_KEYS"):
+        val = os.getenv(var_name, "").strip()
+        if val:
+            for part in val.split(","):
+                k = part.strip().strip('"').strip("'").strip()
+                if k and k not in keys:
+                    keys.append(k)
+    try:
+        from config import GEMINI_API_KEYS as CFG_KEYS
+        for k in CFG_KEYS:
+            if k and k not in keys:
+                keys.append(k)
+    except Exception:
+        pass
+    return keys
 
-async def _call_gemini_genai(model_name: str, system_prompt: str, prompt: str, history: list) -> str:
+def get_gemini_client(api_key: str | None = None):
+    global _afk_clients
+    if not genai:
+        return None
+    if not api_key:
+        keys = get_afk_gemini_keys()
+        if not keys:
+            return None
+        api_key = keys[0]
+    if api_key in _afk_clients:
+        return _afk_clients[api_key]
+    try:
+        client = genai.Client(api_key=api_key)
+        _afk_clients[api_key] = client
+        return client
+    except Exception as e:
+        logger.warning(f"Failed to init genai Client: {e}")
+        return None
+
+async def _call_gemini_genai(model_name: str, system_prompt: str, prompt: str, history: list, api_key: str | None = None) -> str:
     """Вызов через официальный SDK google-genai с моделью Flash Lite."""
-    client = get_gemini_client()
+    client = get_gemini_client(api_key=api_key)
     if not client:
         return None
 
@@ -388,17 +415,23 @@ async def generate_reply(chat_id: int, incoming_text: str, reason: str, mode: st
     # Для режима aiafk (открытый ассистент) используем ассистент-промпт
     system_prompt = build_aiafk_prompt(reason)
 
-    # 1. Попытка через Google GenAI
-    for g_model in ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]:
-        try:
-            answer = await _call_gemini_genai(g_model, system_prompt, incoming_text, history)
-            if answer and answer.strip():
-                reply = clean_ai_reply(answer.strip(), mode=mode)
-                history.append({"role": "user", "content": incoming_text})
-                history.append({"role": "assistant", "content": reply})
-                return reply
-        except Exception as e:
-            logger.warning(f"GenAI Client ({g_model}) failed: {e}")
+    # 1. Попытка через Google GenAI с перебором пула ключей
+    keys = get_afk_gemini_keys()
+    for k in keys:
+        for g_model in ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]:
+            try:
+                answer = await _call_gemini_genai(g_model, system_prompt, incoming_text, history, api_key=k)
+                if answer and answer.strip():
+                    reply = clean_ai_reply(answer.strip(), mode=mode)
+                    history.append({"role": "user", "content": incoming_text})
+                    history.append({"role": "assistant", "content": reply})
+                    return reply
+            except Exception as e:
+                logger.warning(f"GenAI Client ({g_model}) failed on key ...{k[-6:]}: {e}")
+                if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or "quota" in str(e).lower():
+                    break
+                continue
+
 
     if mode == "aiafk":
         return f"🤖 Привет! Владелец аккаунта сейчас отсутствует ({reason}) и ответит тебе лично позже! ✨"
