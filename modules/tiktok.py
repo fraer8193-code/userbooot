@@ -41,6 +41,66 @@ BROWSER_DATA_DIR.mkdir(parents=True, exist_ok=True)
 
 SESSION_FILE = Path("tiktok_session.json")
 COOKIES_FILE = Path("tiktok_cookies.txt").resolve()
+SEEN_FILE = Path("tiktok_seen.json").resolve()
+
+# ===================== БАЗА ДАННЫХ ПРОСМОТРЕННЫХ ВИДЕО =====================
+
+def load_seen_videos() -> dict:
+    """Загружает базу отправленных видео для предотвращения повторов."""
+    if SEEN_FILE.exists():
+        try:
+            with open(SEEN_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+def save_seen_videos(seen_dict: dict):
+    """Сохраняет базу отправленных видео (хранит до 2500 последних)."""
+    try:
+        if len(seen_dict) > 2500:
+            items = list(seen_dict.items())[-2500:]
+            seen_dict = dict(items)
+        with open(SEEN_FILE, "w", encoding="utf-8") as f:
+            json.dump(seen_dict, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def mark_video_seen(video_id: str, author: str = "", title: str = ""):
+    """Отмечает видео как отправленное с уникальным ID, автором и описанием."""
+    seen = load_seen_videos()
+    v_str = str(video_id).strip()
+    auth_clean = str(author).strip().lower()
+    title_clean = str(title).strip()[:80].lower()
+    comp_key = f"{auth_clean}::{title_clean}" if (auth_clean and title_clean) else ""
+
+    if v_str:
+        seen[v_str] = {
+            "author": author,
+            "title": title[:100],
+            "key": comp_key,
+            "sent_at": int(time.time())
+        }
+    if comp_key:
+        seen[f"k:{comp_key}"] = {
+            "id": v_str,
+            "sent_at": int(time.time())
+        }
+    save_seen_videos(seen)
+
+def is_video_already_seen(video_id: str, author: str = "", title: str = "") -> bool:
+    """Проверяет, отправлялось ли уже видео пользователю (по ID или связке автор+описание)."""
+    seen = load_seen_videos()
+    v_str = str(video_id).strip()
+    if v_str and v_str in seen:
+        return True
+    auth_clean = str(author).strip().lower()
+    title_clean = str(title).strip()[:80].lower()
+    if auth_clean and title_clean:
+        comp_key = f"k:{auth_clean}::{title_clean}"
+        if comp_key in seen:
+            return True
+    return False
 
 async def export_netscape_cookies(ctx):
     """Экспортирует куки браузера в формат Netscape для yt-dlp и сессий."""
@@ -62,7 +122,6 @@ async def export_netscape_cookies(ctx):
         pass
 
 TIKWM_API_BASE = "https://www.tikwm.com/api/"
-TIKWM_FEED_API = "https://www.tikwm.com/api/feed/list"
 
 REQUEST_TIMEOUT = aiohttp.ClientTimeout(total=30, connect=10)
 DOWNLOAD_TIMEOUT = aiohttp.ClientTimeout(total=90, connect=10)
@@ -280,15 +339,9 @@ async def browser_tiktok_auth(event: events.NewMessage.Event):
                     headless=False,
                     user_agent=USER_AGENT,
                     viewport={"width": 1280, "height": 850},
-                    locale=BELARUS_LOCALE,
-                    timezone_id=BELARUS_TIMEZONE,
-                    geolocation=BELARUS_COORDINATES,
-                    permissions=["geolocation"],
-                    extra_http_headers={
-                        "Accept-Language": "ru-RU,ru;q=0.9,be-BY;q=0.8,be;q=0.7,en-US;q=0.5,en;q=0.3"
-                    },
+                    locale="ru-RU",
                     ignore_default_args=BROWSER_IGNORE_DEFAULT_ARGS,
-                    args=BROWSER_ARGS + ["--lang=ru-RU,ru"]
+                    args=BROWSER_ARGS
                 )
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 await page.add_init_script(STEALTH_JS)
@@ -357,9 +410,9 @@ async def browser_tiktok_auth(event: events.NewMessage.Event):
 
 async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
     """
-    Запускает headless Chromium с обходом антибота (Stealth) с локалью Беларуси,
-    открывает tiktok.com/foryou или проверенные региональные теги СНГ под сохраненным профилем
-    и перехватывает свежую ленту рекомендаций с нативными данными.
+    Запускает headless Chromium с профилем пользователя,
+    открывает личную ленту tiktok.com/foryou
+    и перехватывает свежую ленту рекомендаций аккаунта.
     """
     if not PLAYWRIGHT_AVAILABLE:
         return []
@@ -375,34 +428,17 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                     headless=True,
                     user_agent=USER_AGENT,
                     viewport={"width": 1280, "height": 850},
-                    locale=BELARUS_LOCALE,
-                    timezone_id=BELARUS_TIMEZONE,
-                    geolocation=BELARUS_COORDINATES,
-                    permissions=["geolocation"],
-                    extra_http_headers={
-                        "Accept-Language": "ru-RU,ru;q=0.9,be-BY;q=0.8,be;q=0.7,en-US;q=0.5,en;q=0.3"
-                    },
+                    locale="ru-RU",
                     ignore_default_args=BROWSER_IGNORE_DEFAULT_ARGS,
-                    args=BROWSER_ARGS + ["--lang=ru-RU,ru"]
+                    args=BROWSER_ARGS
                 )
-
-                # Куки для жесткой фиксации региона Беларуси
-                try:
-                    await ctx.add_cookies([
-                        {"name": "store-country-code", "value": "by", "domain": ".tiktok.com", "path": "/"},
-                        {"name": "store-country-code-src", "value": "did", "domain": ".tiktok.com", "path": "/"},
-                        {"name": "my_region", "value": "BY", "domain": ".tiktok.com", "path": "/"},
-                        {"name": "tt_chain_token", "value": "by", "domain": ".tiktok.com", "path": "/"},
-                    ])
-                except Exception:
-                    pass
 
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 await page.add_init_script(STEALTH_JS)
 
                 async def handle_response(resp):
                     url = resp.url
-                    if any(k in url for k in ["/api/recommend/item_list", "/api/explore/item_list", "/api/item/list", "/api/post/item_list", "/api/preload/item_list", "/api/challenge/item_list", "item_list"]):
+                    if any(k in url for k in ["/api/recommend/item_list", "/api/item/list", "item_list"]):
                         try:
                             res = await resp.json()
                             items = res.get("itemList") or res.get("data") or []
@@ -411,14 +447,9 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                                     if not isinstance(it, dict):
                                         continue
 
-                                    # Строгая фильтрация: отсекаем весь иностранный/индийский мусор
-                                    if not is_quality_cis_video(it):
-                                        continue
-
                                     v_id = str(it.get("id") or it.get("video_id") or "")
                                     if not v_id or v_id in seen_ids or v_id in _seen_video_ids:
                                         continue
-                                    seen_ids.add(v_id)
 
                                     author = it.get("author", {})
                                     uname = ""
@@ -430,12 +461,23 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                                         uname = author
                                         nick = author
 
+                                    desc = it.get("desc") or it.get("title") or ""
+
+                                    # Защита от повторов: если видео уже отправлялось раньше — пропускаем!
+                                    if is_video_already_seen(v_id, uname, desc):
+                                        continue
+
+                                    # Фильтр от мусора и индийских спам-скриптов
+                                    if not is_quality_cis_video(it):
+                                        continue
+
                                     video_info = it.get("video", {}) if isinstance(it.get("video"), dict) else {}
                                     play_url = video_info.get("downloadAddr") or video_info.get("playAddr") or it.get("hdplay") or it.get("play")
                                     if not play_url:
                                         continue
 
-                                    desc = it.get("desc") or it.get("title") or ""
+                                    seen_ids.add(v_id)
+
                                     music_title = ""
                                     music_obj = it.get("music") or it.get("music_info")
                                     if isinstance(music_obj, dict):
@@ -452,14 +494,13 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                                         "music": music_title,
                                         "play_url": play_url,
                                         "original_url": orig_url,
-                                        "source": "browser_feed"
+                                        "source": "account_fyp"
                                     })
                         except Exception:
                             pass
 
                 page.on("response", handle_response)
 
-                # 1. Переход к персональным рекомендациям (For You) с локалью Беларуси
                 try:
                     await page.goto("https://www.tiktok.com/foryou?lang=ru-RU", wait_until="commit", timeout=10000)
                 except Exception:
@@ -475,22 +516,7 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                     except Exception:
                         pass
 
-                # 2. Только если лента For You пуста (0 видео), открываем тег Беларуси
-                if not videos:
-                    try:
-                        await page.goto("https://www.tiktok.com/tag/%D0%B1%D0%B5%D0%BB%D0%B0%D1%80%D1%83%D1%81%D1%8C?lang=ru-RU", wait_until="commit", timeout=8000)
-                        for _ in range(4):
-                            if videos:
-                                break
-                            await asyncio.sleep(0.5)
-                            try:
-                                await page.mouse.wheel(0, 900)
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
-
-                # 3. Мгновенная предзагрузка первых видео прямо в активной сессии браузера (обход Akamai CDN)
+                # 2. Мгновенная предзагрузка первых видео прямо в активной сессии браузера (обход Akamai CDN)
                 for v in videos[:2]:
                     p_url = v.get("play_url")
                     if p_url and not v.get("video_bytes"):
@@ -659,57 +685,24 @@ async def fetch_tiktok_recommendations_http(sessionid: str = "") -> list:
                                 continue
                             v_id = str(it.get("id", ""))
                             author = it.get("author", {})
+                            uname = author.get("uniqueId", "") if isinstance(author, dict) else ""
+                            desc = it.get("desc", "")
+                            if is_video_already_seen(v_id, uname, desc):
+                                continue
                             video_info = it.get("video", {})
                             play_url = video_info.get("downloadAddr") or video_info.get("playAddr")
-                            if v_id and author:
-                                uname = author.get("uniqueId", "")
+                            if v_id and author and play_url:
                                 videos.append({
                                     "video_id": v_id,
-                                    "title": it.get("desc", ""),
+                                    "title": desc,
                                     "author": uname,
-                                    "author_name": author.get("nickname", uname),
+                                    "author_name": author.get("nickname", uname) if isinstance(author, dict) else uname,
                                     "duration": video_info.get("duration", 0),
-                                    "music": it.get("music", {}).get("title", ""),
+                                    "music": it.get("music", {}).get("title", "") if isinstance(it.get("music"), dict) else "",
                                     "play_url": play_url,
                                     "original_url": f"https://www.tiktok.com/@{uname}/video/{v_id}" if uname else "",
                                     "source": "account_fyp"
                                 })
-    except Exception:
-        pass
-
-    if videos:
-        return videos
-
-    # TikWM Trending API (если аккаунт не дал фид)
-    try:
-        async with aiohttp.ClientSession() as session:
-            for reg in ["BY", "KZ", "RU"]:
-                params = {"region": reg, "count": 15}
-                async with session.get(TIKWM_FEED_API, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT) as resp:
-                    if resp.status == 200:
-                        res = await resp.json(content_type=None)
-                        if res.get("code") == 0 and res.get("data"):
-                            for item in res["data"]:
-                                if not is_quality_cis_video(item):
-                                    continue
-                                author = item.get("author", {})
-                                v_id = str(item.get("video_id", item.get("id", "")))
-                                uname = author.get("unique_id", "") if isinstance(author, dict) else ""
-                                play = item.get("hdplay") or item.get("play")
-                                if v_id and play:
-                                    videos.append({
-                                        "video_id": v_id,
-                                        "title": item.get("title", ""),
-                                        "author": uname,
-                                        "author_name": author.get("nickname", uname) if isinstance(author, dict) else uname,
-                                        "duration": item.get("duration", 0),
-                                        "music": item.get("music_info", {}).get("title", "") if isinstance(item.get("music_info"), dict) else "",
-                                        "play_url": play,
-                                        "original_url": f"https://www.tiktok.com/@{uname}/video/{v_id}" if uname else "",
-                                        "source": "trending"
-                                    })
-                            if videos:
-                                break
     except Exception:
         pass
 
@@ -860,8 +853,11 @@ async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
         if not new_batch:
             new_batch = await fetch_tiktok_recommendations_http()
 
-        # Строгая фильтрация (Беларусь и СНГ контент)
-        filtered = [v for v in new_batch if is_quality_cis_video(v)]
+        # Строгая фильтрация (контент без повторов)
+        filtered = [
+            v for v in new_batch 
+            if is_quality_cis_video(v) and not is_video_already_seen(v.get("video_id", ""), v.get("author", ""), v.get("title", ""))
+        ]
         fresh = [v for v in filtered if v.get("video_id") not in _seen_video_ids]
         if not fresh and filtered:
             _seen_video_ids.clear()
@@ -875,9 +871,17 @@ async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
     # Перебираем очередь, пока не найдем успешно скачанное видео
     while _rec_feed_queue:
         chosen = _rec_feed_queue.pop(0)
+        v_id = str(chosen.get("video_id", ""))
+        author = str(chosen.get("author", ""))
+        title = str(chosen.get("title", ""))
+
+        # Исключаем повторы по уникальному ID и связке автор+описание
+        if is_video_already_seen(v_id, author, title):
+            continue
+
         if not is_quality_cis_video(chosen):
             continue
-        v_id = chosen.get("video_id", "")
+
         if v_id:
             _seen_video_ids.add(v_id)
         if len(_seen_video_ids) > 500:
@@ -885,6 +889,7 @@ async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
 
         # 1. Если видео уже предварительно скачано прямо в сессии браузера
         if chosen.get("video_bytes") and len(chosen["video_bytes"]) > 5000:
+            mark_video_seen(v_id, author, title)
             return chosen["video_bytes"], chosen
 
         # 2. Скачивание play_url через direct request с куками
@@ -900,6 +905,7 @@ async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
                 chosen.update({k: v for k, v in meta.items() if v})
 
         if video_bytes and len(video_bytes) > 5000:
+            mark_video_seen(v_id, author, title)
             return video_bytes, chosen
 
     return None, {}
@@ -908,7 +914,7 @@ def _format_caption(meta: dict, elapsed: float, is_fyp: bool = False) -> str:
     """Форматирует красивый текст для сообщения (с защитой от лимита Telegram 1024 символа)."""
     parts = []
 
-    badge = "🎬 **Рекомендации TikTok (Беларусь/СНГ)**" if is_fyp else "🎬 **Видео из TikTok**"
+    badge = "🎬 **Мои рекомендации TikTok (FYP)**" if is_fyp else "🎬 **Видео из TikTok**"
     if meta.get("author"):
         profile_url = f"https://www.tiktok.com/@{meta['author']}"
         author_display = str(meta.get("author_name") or meta["author"])[:40]
