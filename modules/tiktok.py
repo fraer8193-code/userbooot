@@ -432,6 +432,8 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
 
                                     video_info = it.get("video", {}) if isinstance(it.get("video"), dict) else {}
                                     play_url = video_info.get("downloadAddr") or video_info.get("playAddr") or it.get("hdplay") or it.get("play")
+                                    if not play_url:
+                                        continue
 
                                     desc = it.get("desc") or it.get("title") or ""
                                     music_title = ""
@@ -459,84 +461,51 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
 
                 # 1. Переход к персональным рекомендациям (For You) с локалью Беларуси
                 try:
-                    await page.goto("https://www.tiktok.com/foryou?lang=ru-RU", wait_until="commit", timeout=12000)
+                    await page.goto("https://www.tiktok.com/foryou?lang=ru-RU", wait_until="commit", timeout=10000)
                 except Exception:
                     pass
 
-                # Скроллим и ждем появления качественных видео
-                for _ in range(6):
-                    if len(videos) >= count:
+                # Быстрый скролл для перехвата свежих видео из For You
+                for _ in range(5):
+                    if len(videos) >= 4:
                         break
-                    await asyncio.sleep(0.7)
+                    await asyncio.sleep(0.5)
                     try:
                         await page.mouse.wheel(0, 900)
                     except Exception:
                         pass
 
-                # 2. Если в For You мало видео из Беларуси/СНГ, подгружаем региональные теги
-                if len(videos) < count:
-                    regional_tags = [
-                        "%D0%B1%D0%B5%D0%BB%D0%B0%D1%80%D1%83%D1%81%D1%8C",          # беларусь
-                        "%D0%BC%D0%B8%D0%BD%D1%81%D0%BA",              # минск
-                        "%D0%B2%D1%80%D0%B5%D0%BA",                    # врек
-                        "%D1%80%D0%B5%D0%BA%D0%BE%D0%BC%D0%B5%D0%BD%D0%B4%D0%B0%D1%86%D0%B8%D0%B8", # рекомендации
-                        "%D0%B6%D0%B8%D0%B7%D0%B0",                    # жиза
-                        "%D0%BC%D0%B5%D0%BC%D1%8B"                     # мемы
-                    ]
-                    random.shuffle(regional_tags)
-                    for tag in regional_tags:
-                        if len(videos) >= count:
-                            break
-                        try:
-                            tag_url = f"https://www.tiktok.com/tag/{tag}?lang=ru-RU"
-                            await page.goto(tag_url, wait_until="commit", timeout=10000)
-                            for _ in range(4):
-                                if len(videos) >= count:
-                                    break
-                                await asyncio.sleep(0.6)
-                                try:
-                                    await page.mouse.wheel(0, 900)
-                                except Exception:
-                                    pass
-                        except Exception:
-                            pass
-
-                # 3. Резервный DOM-сборщик ссылок со страницы
+                # 2. Только если лента For You пуста (0 видео), открываем тег Беларуси
                 if not videos:
                     try:
-                        links = await page.locator('a[href*="/video/"]').all()
-                        for link in links[:count * 2]:
-                            if len(videos) >= count:
+                        await page.goto("https://www.tiktok.com/tag/%D0%B1%D0%B5%D0%BB%D0%B0%D1%80%D1%83%D1%81%D1%8C?lang=ru-RU", wait_until="commit", timeout=8000)
+                        for _ in range(4):
+                            if videos:
                                 break
-                            href = await link.get_attribute("href")
-                            if href and "/video/" in href:
-                                v_id = href.split("/video/")[-1].split("?")[0]
-                                parts = href.split("/video/")[0].split("/@")
-                                uname = parts[-1] if len(parts) > 1 else ""
-
-                                try:
-                                    card_text = await link.inner_text()
-                                except Exception:
-                                    card_text = ""
-
-                                if card_text and not is_quality_cis_video({"desc": card_text, "author": uname}):
-                                    continue
-
-                                if v_id and v_id not in seen_ids and v_id not in _seen_video_ids:
-                                    seen_ids.add(v_id)
-                                    videos.append({
-                                        "video_id": v_id,
-                                        "title": card_text[:150] if card_text else "",
-                                        "author": uname,
-                                        "author_name": uname,
-                                        "duration": 0,
-                                        "music": "",
-                                        "play_url": None,
-                                        "original_url": f"https://www.tiktok.com/@{uname}/video/{v_id}" if uname else f"https://www.tiktok.com/video/{v_id}",
-                                        "source": "browser_dom"
-                                    })
+                            await asyncio.sleep(0.5)
+                            try:
+                                await page.mouse.wheel(0, 900)
+                            except Exception:
+                                pass
                     except Exception:
                         pass
+
+                # 3. Мгновенная предзагрузка первых видео прямо в активной сессии браузера (обход Akamai CDN)
+                for v in videos[:2]:
+                    p_url = v.get("play_url")
+                    if p_url and not v.get("video_bytes"):
+                        try:
+                            v_resp = await ctx.request.get(
+                                p_url,
+                                headers={"Referer": "https://www.tiktok.com/"},
+                                timeout=10000
+                            )
+                            if v_resp.status in (200, 206):
+                                v_data = await v_resp.body()
+                                if len(v_data) > 5000:
+                                    v["video_bytes"] = v_data
+                        except Exception:
+                            pass
 
                 # Сохраняем куки
                 cookies = await ctx.cookies("https://www.tiktok.com")
@@ -554,74 +523,41 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
 async def download_video_browser(play_url: str, cookies_str: str = "") -> bytes | None:
     """
     Высокоскоростное скачивание видео напрямую с CDN TikTok.
-    1) Сверхбыстрый curl.exe с HTTP/2 и TLS-профилем (~1.5 сек на видео).
-    2) Резервный aiohttp.
-    3) Резервный Playwright context.
+    1) Playwright Request API (обходит защиту Akamai CDN за 1-2 сек).
+    2) Резервный aiohttp с заголовками плеера (таймаут 5 сек).
     """
     if not play_url:
         return None
 
-    # Подготавливаем куки если не переданы
-    if not cookies_str and COOKIES_FILE.exists():
-        try:
-            cookie_parts = []
-            for line in COOKIES_FILE.read_text("utf-8").splitlines():
-                if line.startswith("#") or not line.strip():
-                    continue
-                parts = line.split("\t")
-                if len(parts) >= 7:
-                    cookie_parts.append(f"{parts[5]}={parts[6]}")
-            cookies_str = "; ".join(cookie_parts)
-        except Exception:
-            pass
-
-    # 1. Нативный curl.exe (встроен в Windows) — максимальная скорость и поддержка HTTP/2
-    temp_out = TEMP_DIR / f"curl_{int(time.time()*1000)}_{random.randint(100, 999)}.mp4"
-    cmd = [
-        "curl.exe",
-        "-s",
-        "-L",
-        "--compressed",
-        "-A", USER_AGENT,
-        "-e", "https://www.tiktok.com/",
-        "-o", str(temp_out),
-        play_url
-    ]
-    if cookies_str:
-        cmd.extend(["-b", cookies_str])
-
-    try:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.DEVNULL
-        )
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=20.0)
-            if temp_out.exists():
-                sz = temp_out.stat().st_size
-                if sz > 5000:
-                    data = temp_out.read_bytes()
-                    try:
-                        temp_out.unlink()
-                    except Exception:
-                        pass
-                    return data
-        except asyncio.TimeoutError:
+    # 1. Playwright Request API — 100% обход Akamai CDN блокировок
+    if PLAYWRIGHT_AVAILABLE:
+        async with _browser_lock:
             try:
-                proc.kill()
-            except Exception:
-                pass
-    except Exception:
-        pass
-    finally:
-        if temp_out.exists():
-            try:
-                temp_out.unlink()
+                async with async_playwright() as p:
+                    ctx = await p.chromium.launch_persistent_context(
+                        str(BROWSER_DATA_DIR),
+                        headless=True,
+                        user_agent=USER_AGENT,
+                        locale=BELARUS_LOCALE,
+                        timezone_id=BELARUS_TIMEZONE,
+                        ignore_default_args=BROWSER_IGNORE_DEFAULT_ARGS,
+                        args=BROWSER_ARGS
+                    )
+                    resp = await ctx.request.get(
+                        play_url,
+                        headers={"Referer": "https://www.tiktok.com/"},
+                        timeout=12000
+                    )
+                    if resp.status in (200, 206):
+                        data = await resp.body()
+                        await ctx.close()
+                        if len(data) > 5000:
+                            return data
+                    await ctx.close()
             except Exception:
                 pass
 
-    # 2. Резервный способ: aiohttp
+    # 2. Резервный способ: aiohttp с заголовками видеоплеера
     cookies = {}
     if cookies_str:
         for part in cookies_str.split(";"):
@@ -633,42 +569,20 @@ async def download_video_browser(play_url: str, cookies_str: str = "") -> bytes 
         req_headers = {
             "User-Agent": USER_AGENT,
             "Referer": "https://www.tiktok.com/",
-            "Range": "bytes=0-"
+            "Range": "bytes=0-",
+            "Accept": "*/*",
+            "Sec-Fetch-Dest": "video",
+            "Sec-Fetch-Mode": "no-cors",
+            "Sec-Fetch-Site": "cross-site",
         }
         async with aiohttp.ClientSession(cookies=cookies) as session:
-            async with session.get(play_url, headers=req_headers, timeout=aiohttp.ClientTimeout(total=15)) as resp:
+            async with session.get(play_url, headers=req_headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
                 if resp.status in (200, 206):
                     data = await resp.read()
                     if len(data) > 5000:
                         return data
     except Exception:
         pass
-
-    # 3. Запасной способ через Playwright (если предыдущие не прошли)
-    if PLAYWRIGHT_AVAILABLE:
-        async with _browser_lock:
-            try:
-                async with async_playwright() as p:
-                    ctx = await p.chromium.launch_persistent_context(
-                        str(BROWSER_DATA_DIR),
-                        headless=True,
-                        user_agent=USER_AGENT,
-                        ignore_default_args=BROWSER_IGNORE_DEFAULT_ARGS,
-                        args=BROWSER_ARGS
-                    )
-                    resp = await ctx.request.get(
-                        play_url,
-                        headers={"Referer": "https://www.tiktok.com/"},
-                        timeout=20000
-                    )
-                    if resp.status == 200:
-                        data = await resp.body()
-                        await ctx.close()
-                        if len(data) > 5000:
-                            return data
-                    await ctx.close()
-            except Exception:
-                pass
 
     return None
 
@@ -851,12 +765,12 @@ async def download_tiktok_by_url(tiktok_url: str) -> tuple[bytes | None, dict]:
             tiktok_url = await _resolve_short_url(session, tiktok_url)
             metadata["original_url"] = tiktok_url
 
-        # Метод 1: TikWM API
+        # Метод 1: TikWM API (быстрый таймаут 2.5 сек)
         try:
             form = aiohttp.FormData()
             form.add_field("url", tiktok_url)
             form.add_field("hd", "1")
-            async with session.post(TIKWM_API_BASE, data=form, headers=HEADERS, timeout=REQUEST_TIMEOUT) as resp:
+            async with session.post(TIKWM_API_BASE, data=form, headers=HEADERS, timeout=aiohttp.ClientTimeout(total=2.5)) as resp:
                 if resp.status == 200:
                     res = await resp.json(content_type=None)
                     if res.get("code") == 0 and res.get("data"):
@@ -889,7 +803,9 @@ async def download_tiktok_by_url(tiktok_url: str) -> tuple[bytes | None, dict]:
             'outtmpl': str(temp_file) + '.%(ext)s',
             'overwrites': True,
             'http_headers': {'User-Agent': USER_AGENT},
-            'socket_timeout': 25,
+            'socket_timeout': 8,
+            'retries': 1,
+            'fragment_retries': 1,
         }
         if COOKIES_FILE.exists():
             ydl_opts['cookiefile'] = str(COOKIES_FILE)
