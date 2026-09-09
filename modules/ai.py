@@ -38,18 +38,32 @@ AVAILABLE_MODES = {
 
 STATE_FILE = Path(__file__).parent.parent / "ai_state.json"
 
+_cached_gemini_key = None
 gemini_client = None
 
 def get_gemini_client():
-    global gemini_client
-    if not gemini_client and GEMINI_API_KEY:
-        try:
-            gemini_client = genai.Client(api_key=GEMINI_API_KEY)
-        except Exception:
-            gemini_client = None
-    return gemini_client
+    global gemini_client, _cached_gemini_key
+    from dotenv import load_dotenv
+    load_dotenv(override=False)
 
-get_gemini_client()
+    current_key = os.getenv("GEMINI_API_KEY", "").strip() or GEMINI_API_KEY
+    if current_key.startswith("GEMINI_API_KEY="):
+        current_key = current_key.split("=", 1)[1].strip()
+    current_key = current_key.strip('"').strip("'").strip()
+
+    if not current_key:
+        return None
+
+    if gemini_client is None or _cached_gemini_key != current_key:
+        try:
+            gemini_client = genai.Client(api_key=current_key)
+            _cached_gemini_key = current_key
+        except Exception as e:
+            logger.error(f"[AI] Ошибка инициализации Gemini Client: {e}")
+            gemini_client = None
+            _cached_gemini_key = None
+
+    return gemini_client
 
 def check_message_media_type(msg) -> str | None:
     """Определяет тип медиа в сообщении: 'photo', 'video' или None."""
