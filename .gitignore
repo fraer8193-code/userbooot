@@ -20,6 +20,7 @@ __pycache__/
 *_cookies.txt
 *cookies*.txt
 tiktok_session.json
+tiktok_seen.json
 temp_browser_data/
 temp_media/
 

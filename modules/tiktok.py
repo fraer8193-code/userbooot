@@ -256,17 +256,88 @@ _browser_lock = asyncio.Lock()
 # ===================== УПРАВЛЕНИЕ СЕССИЕЙ АККАУНТА =====================
 
 def load_account_session() -> dict:
-    """Загружает сохраненную сессию аккаунта TikTok."""
+    """Загружает сохраненную сессию аккаунта TikTok с авто-восстановлением и полной поддержкой cookies."""
+    data = {}
     if SESSION_FILE.exists():
         try:
             with open(SESSION_FILE, "r", encoding="utf-8") as f:
                 data = json.load(f)
-                return data
+        except Exception:
+            data = {}
+
+    # Если в сохраненной сессии есть sessionid
+    if data and data.get("sessionid"):
+        # Если нет полных cookies_str или cookie_list, обогащаем из COOKIES_FILE если он существует
+        if COOKIES_FILE.exists() and (not data.get("cookie_list") or len(data.get("cookies", {})) <= 1):
+            try:
+                c_map = {}
+                c_list = []
+                for line in COOKIES_FILE.read_text("utf-8").splitlines():
+                    if line.startswith("#") or not line.strip():
+                        continue
+                    parts = line.split("\t")
+                    if len(parts) >= 7:
+                        name, val = parts[5].strip(), parts[6].strip()
+                        c_map[name] = val
+                        c_list.append({
+                            "name": name,
+                            "value": val,
+                            "domain": parts[0].strip(),
+                            "path": parts[2].strip() or "/"
+                        })
+                if c_map:
+                    data["cookies"] = c_map
+                    data["cookie_list"] = c_list
+                    if not data.get("cookies_str") or data["cookies_str"] == f"sessionid={data['sessionid']}":
+                        data["cookies_str"] = "; ".join(f"{k}={v}" for k, v in c_map.items())
+            except Exception:
+                pass
+        return data
+
+    # Авто-восстановление из cookies.txt если сессия есть в браузере
+    if COOKIES_FILE.exists():
+        try:
+            sid = ""
+            c_map = {}
+            c_list = []
+            for line in COOKIES_FILE.read_text("utf-8").splitlines():
+                if line.startswith("#") or not line.strip():
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 7:
+                    name, val = parts[5].strip(), parts[6].strip()
+                    c_map[name] = val
+                    c_list.append({
+                        "name": name,
+                        "value": val,
+                        "domain": parts[0].strip(),
+                        "path": parts[2].strip() or "/"
+                    })
+                    if name in ("sessionid", "sessionid_ss") and not sid:
+                        sid = val
+            if sid:
+                cookie_str = "; ".join(f"{k}={v}" for k, v in c_map.items())
+                acc = {
+                    "sessionid": sid,
+                    "cookies_str": cookie_str,
+                    "cookies": c_map,
+                    "cookie_list": c_list,
+                    "username": "iamkinngs",
+                    "nickname": "iamkinngs",
+                    "avatar_url": "",
+                    "last_login": int(time.time()),
+                    "browser_auth": True
+                }
+                save_account_session(acc)
+                return acc
         except Exception:
             pass
+
     return {
         "sessionid": "",
         "cookies_str": "",
+        "cookies": {},
+        "cookie_list": [],
         "username": "",
         "nickname": "",
         "avatar_url": "",
@@ -275,33 +346,129 @@ def load_account_session() -> dict:
     }
 
 def save_account_session(data: dict):
-    """Сохраняет данные сессии аккаунта."""
+    """Сохраняет данные сессии аккаунта и синхронизирует куки."""
     try:
         with open(SESSION_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception:
         pass
 
-def parse_cookies_input(raw_input: str) -> tuple[str, dict]:
+    # Если переданы куки, также синхронизируем tiktok_cookies.txt (Netscape)
+    try:
+        c_list = data.get("cookie_list")
+        if not c_list and data.get("cookies"):
+            c_list = [
+                {"name": k, "value": v, "domain": ".tiktok.com", "path": "/"}
+                for k, v in data["cookies"].items()
+            ]
+        elif not c_list and data.get("sessionid"):
+            c_list = [
+                {"name": "sessionid", "value": data["sessionid"], "domain": ".tiktok.com", "path": "/"},
+                {"name": "sessionid_ss", "value": data["sessionid"], "domain": ".tiktok.com", "path": "/"},
+                {"name": "sid_tt", "value": data["sessionid"], "domain": ".tiktok.com", "path": "/"},
+            ]
+        if c_list and not COOKIES_FILE.exists():
+            lines = ["# Netscape HTTP Cookie File"]
+            for c in c_list:
+                dom = c.get("domain", ".tiktok.com")
+                flag = "TRUE" if dom.startswith(".") else "FALSE"
+                path = c.get("path", "/")
+                lines.append(f"{dom}\t{flag}\t{path}\tTRUE\t0\t{c['name']}\t{c['value']}")
+            COOKIES_FILE.write_text("\n".join(lines), encoding="utf-8")
+    except Exception:
+        pass
+
+def parse_cookies_input(raw_input: str) -> tuple[str, dict, list]:
     """
-    Извлекает sessionid и словарь куков из переданной строки.
+    Извлекает sessionid, словарь cookies и список cookie-объектов из любого формата:
+    - JSON (Cookie-Editor, EditThisCookie)
+    - Netscape Cookie format
+    - HTTP Cookie header (k1=v1; k2=v2)
+    - Одиночный sessionid
     """
     raw_input = raw_input.strip()
     cookies_dict = {}
+    cookies_list = []
     sessionid = ""
 
+    # 1. Попытка распарсить как JSON (список кук или словарь)
+    if (raw_input.startswith("[") and raw_input.endswith("]")) or (raw_input.startswith("{") and raw_input.endswith("}")):
+        try:
+            parsed = json.loads(raw_input)
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict) and item.get("name") and item.get("value"):
+                        n, v = str(item["name"]).strip(), str(item["value"]).strip()
+                        cookies_dict[n] = v
+                        cookies_list.append({
+                            "name": n,
+                            "value": v,
+                            "domain": str(item.get("domain") or ".tiktok.com").strip(),
+                            "path": str(item.get("path") or "/").strip()
+                        })
+            elif isinstance(parsed, dict):
+                for k, v in parsed.items():
+                    n, val = str(k).strip(), str(v).strip()
+                    cookies_dict[n] = val
+                    cookies_list.append({
+                        "name": n,
+                        "value": val,
+                        "domain": ".tiktok.com",
+                        "path": "/"
+                    })
+            sessionid = cookies_dict.get("sessionid") or cookies_dict.get("sessionid_ss") or ""
+            if sessionid:
+                return sessionid, cookies_dict, cookies_list
+        except Exception:
+            pass
+
+    # 2. Попытка распарсить как Netscape Cookie формат (табы)
+    if "\t" in raw_input:
+        for line in raw_input.splitlines():
+            if line.startswith("#") or not line.strip():
+                continue
+            parts = line.split("\t")
+            if len(parts) >= 7:
+                n, v = parts[5].strip(), parts[6].strip()
+                cookies_dict[n] = v
+                cookies_list.append({
+                    "name": n,
+                    "value": v,
+                    "domain": parts[0].strip(),
+                    "path": parts[2].strip() or "/"
+                })
+        sessionid = cookies_dict.get("sessionid") or cookies_dict.get("sessionid_ss") or ""
+        if sessionid:
+            return sessionid, cookies_dict, cookies_list
+
+    # 3. HTTP Cookie строка (k1=v1; k2=v2)
     if "=" in raw_input or ";" in raw_input:
         parts = raw_input.split(";")
         for part in parts:
             if "=" in part:
                 k, v = part.strip().split("=", 1)
-                cookies_dict[k.strip()] = v.strip()
-        sessionid = cookies_dict.get("sessionid", "")
+                n, val = k.strip(), v.strip()
+                if n and val:
+                    cookies_dict[n] = val
+                    cookies_list.append({
+                        "name": n,
+                        "value": val,
+                        "domain": ".tiktok.com",
+                        "path": "/"
+                    })
+        sessionid = cookies_dict.get("sessionid") or cookies_dict.get("sessionid_ss") or ""
     else:
+        # 4. Одиночный sessionid
         sessionid = raw_input
         cookies_dict["sessionid"] = sessionid
+        cookies_list.append({
+            "name": "sessionid",
+            "value": sessionid,
+            "domain": ".tiktok.com",
+            "path": "/"
+        })
 
-    return sessionid, cookies_dict
+    return sessionid, cookies_dict, cookies_list
 
 # ===================== АВТОРИЗАЦИЯ ЧЕРЕЗ БРАУЗЕР (QR-КОД) =====================
 
@@ -382,9 +549,20 @@ async def browser_tiktok_auth(event: events.NewMessage.Event):
             return
 
     if logged_in:
+        cookie_str = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
         acc_data = {
             "sessionid": sid,
-            "cookies_str": f"sessionid={sid}",
+            "cookies_str": cookie_str,
+            "cookies": {c["name"]: c["value"] for c in cookies},
+            "cookie_list": [
+                {
+                    "name": c["name"],
+                    "value": c["value"],
+                    "domain": c.get("domain", ".tiktok.com"),
+                    "path": c.get("path", "/")
+                }
+                for c in cookies
+            ],
             "username": username,
             "nickname": username,
             "avatar_url": "",
@@ -406,11 +584,129 @@ async def browser_tiktok_auth(event: events.NewMessage.Event):
             "Вход не был подтвержден. Чтобы попробовать снова, напиши: `.tt auth`."
         )
 
+# ===================== ЗАГРУЗКА И СИНХРОНИЗАЦИЯ КУКИ В PLAYWRIGHT =====================
+
+async def apply_saved_cookies_to_context(ctx):
+    """
+    Загружает полный набор cookies авторизованного пользователя в контекст Playwright
+    перед любыми переходами по страницам (sessionid, passport, token, auth cookies).
+    Поддерживает:
+    - Детальный список cookie_list
+    - Netscape-дамп tiktok_cookies.txt
+    - Словарь cookies
+    - Строку cookies_str
+    - Авто-синтез обязательных cookies TikTok, если в tiktok_session.json есть только sessionid.
+    """
+    account = load_account_session()
+    sid = account.get("sessionid", "").strip()
+
+    cookies_to_add = []
+
+    # 1. Загружаем из cookie_list (если сохранен детальный список)
+    if isinstance(account.get("cookie_list"), list):
+        for c in account["cookie_list"]:
+            if isinstance(c, dict) and c.get("name") and c.get("value"):
+                cookies_to_add.append({
+                    "name": str(c["name"]).strip(),
+                    "value": str(c["value"]).strip(),
+                    "domain": str(c.get("domain") or ".tiktok.com").strip(),
+                    "path": str(c.get("path") or "/").strip(),
+                })
+
+    # 2. Загружаем из Netscape-дампа tiktok_cookies.txt (полные куки браузера)
+    if COOKIES_FILE.exists():
+        try:
+            for line in COOKIES_FILE.read_text("utf-8").splitlines():
+                if line.startswith("#") or not line.strip():
+                    continue
+                parts = line.split("\t")
+                if len(parts) >= 7:
+                    c_name = parts[5].strip()
+                    c_val = parts[6].strip()
+                    c_dom = parts[0].strip() or ".tiktok.com"
+                    c_path = parts[2].strip() or "/"
+                    if c_name and c_val:
+                        cookies_to_add.append({
+                            "name": c_name,
+                            "value": c_val,
+                            "domain": c_dom,
+                            "path": c_path
+                        })
+        except Exception:
+            pass
+
+    # 3. Загружаем из словаря cookies в account
+    if isinstance(account.get("cookies"), dict):
+        for k, v in account["cookies"].items():
+            if k and v:
+                cookies_to_add.append({
+                    "name": str(k).strip(),
+                    "value": str(v).strip(),
+                    "domain": ".tiktok.com",
+                    "path": "/"
+                })
+
+    # 4. Загружаем из сохраненной строки cookies_str
+    cookies_str = account.get("cookies_str", "").strip()
+    if cookies_str:
+        for part in cookies_str.split(";"):
+            if "=" in part:
+                k, v = part.strip().split("=", 1)
+                k = k.strip()
+                v = v.strip()
+                if k and v:
+                    cookies_to_add.append({
+                        "name": k,
+                        "value": v,
+                        "domain": ".tiktok.com",
+                        "path": "/"
+                    })
+
+    # 5. Если в сессии есть sessionid (даже если передан ТОЛЬКО sessionid без остальных кук)
+    # Автоматически добавляем необходимые для нормальной работы аккаунта cookies
+    if sid:
+        cookies_to_add.append({"name": "sessionid", "value": sid, "domain": ".tiktok.com", "path": "/"})
+        cookies_to_add.append({"name": "sessionid_ss", "value": sid, "domain": ".tiktok.com", "path": "/"})
+        cookies_to_add.append({"name": "sid_tt", "value": sid, "domain": ".tiktok.com", "path": "/"})
+        cookies_to_add.append({"name": "sid_guard", "value": sid, "domain": ".tiktok.com", "path": "/"})
+        cookies_to_add.append({"name": "passport_fe_beating_status", "value": "true", "domain": ".www.tiktok.com", "path": "/"})
+        cookies_to_add.append({
+            "name": "cookie-consent",
+            "value": "%7B%22optional%22%3Atrue%2C%22ga%22%3Atrue%2C%22af%22%3Atrue%2C%22fbp%22%3Atrue%2C%22lip%22%3Atrue%2C%22bing%22%3Atrue%2C%22ttads%22%3Atrue%2C%22reddit%22%3Atrue%2C%22hubspot%22%3Atrue%2C%22version%22%3A%22v10%22%7D",
+            "domain": ".tiktok.com",
+            "path": "/"
+        })
+
+    if cookies_to_add:
+        # Убираем дубликаты по имени и домену с нормализацией
+        unique = {}
+        for c in cookies_to_add:
+            dom = c.get("domain", ".tiktok.com")
+            if not dom.startswith(".") and not dom.startswith("www"):
+                dom = "." + dom
+            key = (c["name"], dom)
+            unique[key] = {
+                "name": c["name"],
+                "value": c["value"],
+                "domain": dom,
+                "path": c.get("path", "/")
+            }
+        cookie_list = list(unique.values())
+        try:
+            await ctx.add_cookies(cookie_list)
+        except Exception:
+            for c in cookie_list:
+                try:
+                    await ctx.add_cookies([c])
+                except Exception:
+                    pass
+
 # ===================== ИЗВЛЕЧЕНИЕ РЕКОМЕНДАЦИЙ (BROWSER) =====================
 
-async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
+async def fetch_tiktok_recommendations_browser(count: int = 15, preload_first: bool = True) -> list:
     """
     Запускает headless Chromium с профилем пользователя,
+    загружает все сохраненные cookies авторизации,
     открывает личную ленту tiktok.com/foryou
     и перехватывает свежую ленту рекомендаций аккаунта.
     """
@@ -433,8 +729,25 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                     args=BROWSER_ARGS
                 )
 
+                # Загружаем все cookies авторизации перед запросами
+                await apply_saved_cookies_to_context(ctx)
+
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 await page.add_init_script(STEALTH_JS)
+
+                # Блокируем картинки, шрифты и тяжелое медиа страницы, чтобы TikTok не тормозил и загружался мгновенно
+                async def _route_blocker(route):
+                    if route.request.resource_type in ("image", "media", "font"):
+                        await route.abort()
+                    else:
+                        await route.continue_()
+
+                try:
+                    await page.route("**/*", _route_blocker)
+                except Exception:
+                    pass
+
+                feed_ready_event = asyncio.Event()
 
                 async def handle_response(resp):
                     url = resp.url
@@ -472,7 +785,8 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                                         continue
 
                                     video_info = it.get("video", {}) if isinstance(it.get("video"), dict) else {}
-                                    play_url = video_info.get("downloadAddr") or video_info.get("playAddr") or it.get("hdplay") or it.get("play")
+                                    play_url = video_info.get("playAddr") or video_info.get("downloadAddr") or it.get("hdplay") or it.get("play")
+                                    alt_url = video_info.get("downloadAddr") if play_url != video_info.get("downloadAddr") else video_info.get("playAddr")
                                     if not play_url:
                                         continue
 
@@ -493,22 +807,25 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                                         "duration": video_info.get("duration", 0),
                                         "music": music_title,
                                         "play_url": play_url,
+                                        "alt_play_url": alt_url,
                                         "original_url": orig_url,
                                         "source": "account_fyp"
                                     })
+                                if len(videos) > 0:
+                                    feed_ready_event.set()
                         except Exception:
                             pass
 
                 page.on("response", handle_response)
 
                 try:
-                    await page.goto("https://www.tiktok.com/foryou?lang=ru-RU", wait_until="commit", timeout=10000)
+                    await page.goto("https://www.tiktok.com/foryou", wait_until="domcontentloaded", timeout=12000)
                 except Exception:
                     pass
 
-                # Быстрый скролл для перехвата свежих видео из For You
-                for _ in range(5):
-                    if len(videos) >= 4:
+                # Быстрый скролл для перехвата свежих видео из For You (до 6 секунд максимум)
+                for _ in range(12):
+                    if feed_ready_event.is_set():
                         break
                     await asyncio.sleep(0.5)
                     try:
@@ -516,20 +833,23 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                     except Exception:
                         pass
 
-                # 2. Мгновенная предзагрузка первых видео прямо в активной сессии браузера (обход Akamai CDN)
-                for v in videos[:2]:
-                    p_url = v.get("play_url")
-                    if p_url and not v.get("video_bytes"):
+                # 2. Предзагрузка ровно 1 (первого) видео из полученных рекомендаций
+                if preload_first and videos:
+                    target_v = videos[0]
+                    for p_url in [target_v.get("play_url"), target_v.get("alt_play_url")]:
+                        if not p_url or target_v.get("video_bytes"):
+                            continue
                         try:
                             v_resp = await ctx.request.get(
                                 p_url,
                                 headers={"Referer": "https://www.tiktok.com/"},
-                                timeout=10000
+                                timeout=8000
                             )
                             if v_resp.status in (200, 206):
                                 v_data = await v_resp.body()
                                 if len(v_data) > 5000:
-                                    v["video_bytes"] = v_data
+                                    target_v["video_bytes"] = v_data
+                                    break
                         except Exception:
                             pass
 
@@ -549,41 +869,13 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
 async def download_video_browser(play_url: str, cookies_str: str = "") -> bytes | None:
     """
     Высокоскоростное скачивание видео напрямую с CDN TikTok.
-    1) Playwright Request API (обходит защиту Akamai CDN за 1-2 сек).
-    2) Резервный aiohttp с заголовками плеера (таймаут 5 сек).
+    1) Мгновенный aiohttp с видеоплеерными заголовками (300-500 мс).
+    2) Резервный Playwright Request API при блокировке Akamai CDN.
     """
     if not play_url:
         return None
 
-    # 1. Playwright Request API — 100% обход Akamai CDN блокировок
-    if PLAYWRIGHT_AVAILABLE:
-        async with _browser_lock:
-            try:
-                async with async_playwright() as p:
-                    ctx = await p.chromium.launch_persistent_context(
-                        str(BROWSER_DATA_DIR),
-                        headless=True,
-                        user_agent=USER_AGENT,
-                        locale=BELARUS_LOCALE,
-                        timezone_id=BELARUS_TIMEZONE,
-                        ignore_default_args=BROWSER_IGNORE_DEFAULT_ARGS,
-                        args=BROWSER_ARGS
-                    )
-                    resp = await ctx.request.get(
-                        play_url,
-                        headers={"Referer": "https://www.tiktok.com/"},
-                        timeout=12000
-                    )
-                    if resp.status in (200, 206):
-                        data = await resp.body()
-                        await ctx.close()
-                        if len(data) > 5000:
-                            return data
-                    await ctx.close()
-            except Exception:
-                pass
-
-    # 2. Резервный способ: aiohttp с заголовками видеоплеера
+    # 1. Быстрый способ: aiohttp (0.3 - 0.7 сек)
     cookies = {}
     if cookies_str:
         for part in cookies_str.split(";"):
@@ -602,13 +894,41 @@ async def download_video_browser(play_url: str, cookies_str: str = "") -> bytes 
             "Sec-Fetch-Site": "cross-site",
         }
         async with aiohttp.ClientSession(cookies=cookies) as session:
-            async with session.get(play_url, headers=req_headers, timeout=aiohttp.ClientTimeout(total=5)) as resp:
+            async with session.get(play_url, headers=req_headers, timeout=aiohttp.ClientTimeout(total=4)) as resp:
                 if resp.status in (200, 206):
                     data = await resp.read()
                     if len(data) > 5000:
                         return data
     except Exception:
         pass
+
+    # 2. Резерв: Playwright Request API — 100% обход Akamai CDN блокировок
+    if PLAYWRIGHT_AVAILABLE:
+        async with _browser_lock:
+            try:
+                async with async_playwright() as p:
+                    ctx = await p.chromium.launch_persistent_context(
+                        str(BROWSER_DATA_DIR),
+                        headless=True,
+                        user_agent=USER_AGENT,
+                        locale="ru-RU",
+                        ignore_default_args=BROWSER_IGNORE_DEFAULT_ARGS,
+                        args=BROWSER_ARGS
+                    )
+                    await apply_saved_cookies_to_context(ctx)
+                    resp = await ctx.request.get(
+                        play_url,
+                        headers={"Referer": "https://www.tiktok.com/"},
+                        timeout=9000
+                    )
+                    if resp.status in (200, 206):
+                        data = await resp.body()
+                        await ctx.close()
+                        if len(data) > 5000:
+                            return data
+                    await ctx.close()
+            except Exception:
+                pass
 
     return None
 
@@ -654,8 +974,13 @@ async def fetch_tiktok_recommendations_http(sessionid: str = "") -> list:
     if sid:
         cookies["sessionid"] = sid
         if account.get("cookies_str"):
-            _, c_dict = parse_cookies_input(account["cookies_str"])
-            cookies.update(c_dict)
+            try:
+                _, c_dict, _ = parse_cookies_input(account["cookies_str"])
+                cookies.update(c_dict)
+            except Exception:
+                pass
+        if isinstance(account.get("cookies"), dict):
+            cookies.update(account["cookies"])
 
     req_headers = {
         **HEADERS,
@@ -836,6 +1161,29 @@ async def download_tiktok_by_url(tiktok_url: str) -> tuple[bytes | None, dict]:
 
 # ===================== ПОЛУЧЕНИЕ СЛЕДУЮЩЕГО ВИДЕО РЕКОМЕНДАЦИЙ =====================
 
+_refill_lock = asyncio.Lock()
+
+async def _background_refill_and_preload():
+    """
+    Фоновый воркер:
+    Если в очереди осталось меньше 3 роликов — в фоновом режиме пополняет очередь свежими ссылками из FYP.
+    Не скачивает видеофайлы заранее, чтобы не забивать интернет-канал и трафик.
+    """
+    if _refill_lock.locked():
+        return
+
+    async with _refill_lock:
+        try:
+            if len(_rec_feed_queue) < 3:
+                fresh = await fetch_tiktok_recommendations_browser(count=8, preload_first=False)
+                if fresh:
+                    for it in fresh:
+                        v_id = it.get("video_id")
+                        if v_id and v_id not in _seen_video_ids and is_quality_cis_video(it):
+                            _rec_feed_queue.append(it)
+        except Exception:
+            pass
+
 async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
     """
     Возвращает следующее видео из ленты рекомендаций пользователя (Беларусь/СНГ).
@@ -887,13 +1235,15 @@ async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
         if len(_seen_video_ids) > 500:
             _seen_video_ids.clear()
 
-        # 1. Если видео уже предварительно скачано прямо в сессии браузера
+        # 1. Если видео уже предварительно скачано прямо в сессии браузера или фоне
         if chosen.get("video_bytes") and len(chosen["video_bytes"]) > 5000:
             mark_video_seen(v_id, author, title)
+            # В фоне готовим следующие видео, пока пользователь смотрит текущее
+            asyncio.create_task(_background_refill_and_preload())
             return chosen["video_bytes"], chosen
 
         # 2. Скачивание play_url через direct request с куками
-        play_url = chosen.get("play_url")
+        play_url = chosen.get("play_url") or chosen.get("alt_play_url")
         video_bytes = None
         if play_url:
             video_bytes = await download_video_browser(play_url, cookies_str=chosen.get("cookies_str", ""))
@@ -906,6 +1256,8 @@ async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
 
         if video_bytes and len(video_bytes) > 5000:
             mark_video_seen(v_id, author, title)
+            # В фоне готовим следующие видео
+            asyncio.create_task(_background_refill_and_preload())
             return video_bytes, chosen
 
     return None, {}
@@ -914,13 +1266,12 @@ def _format_caption(meta: dict, elapsed: float, is_fyp: bool = False) -> str:
     """Форматирует красивый текст для сообщения (с защитой от лимита Telegram 1024 символа)."""
     parts = []
 
-    badge = "🎬 **Мои рекомендации TikTok (FYP)**" if is_fyp else "🎬 **Видео из TikTok**"
     if meta.get("author"):
         profile_url = f"https://www.tiktok.com/@{meta['author']}"
         author_display = str(meta.get("author_name") or meta["author"])[:40]
-        parts.append(f"{badge} • [{author_display}]({profile_url})")
-    else:
-        parts.append(badge)
+        parts.append(f"👤 [{author_display}]({profile_url})")
+    elif not is_fyp:
+        parts.append("🎬 **TikTok**")
 
     title = str(meta.get("title", "")).strip()
     if title:
@@ -1000,20 +1351,23 @@ async def tiktok_cmd(event: events.NewMessage.Event):
         await browser_tiktok_auth(event)
         return
 
-    # --- Подкоманда: ВХОД ПО SESSIONID (.tt login <sessionid>) ---
-    if subcmd.lower().startswith("login "):
+    # --- Подкоманда: ВХОД ПО SESSIONID / COOKIES (.tt login / .tt cookie / .tt setcookie) ---
+    if subcmd.lower().startswith(("login ", "setcookie ", "cookie ", "cookies ")):
         cookie_data = subcmd.split(maxsplit=1)[1].strip()
-        sessionid, cookies_dict = parse_cookies_input(cookie_data)
+        sessionid, cookies_dict, cookie_list = parse_cookies_input(cookie_data)
 
         if not sessionid:
             await event.edit("❌ **Ошибка:** Не найден `sessionid`. Укажи: `.tt login <sessionid>` или `.tt auth`.")
             return
 
-        await event.edit("🔄 **Сохраняю сессию аккаунта TikTok...**")
+        await event.edit("🔄 **Сохраняю сессию и cookies аккаунта TikTok...**")
 
+        cookie_str = "; ".join(f"{k}={v}" for k, v in cookies_dict.items())
         account_data = {
             "sessionid": sessionid,
-            "cookies_str": cookie_data,
+            "cookies_str": cookie_str,
+            "cookies": cookies_dict,
+            "cookie_list": cookie_list,
             "username": "",
             "nickname": "",
             "avatar_url": "",
@@ -1022,14 +1376,26 @@ async def tiktok_cmd(event: events.NewMessage.Event):
         }
         save_account_session(account_data)
 
+        # Синхронизируем Netscape cookies для Playwright и yt-dlp
+        if cookie_list:
+            lines = ["# Netscape HTTP Cookie File"]
+            for c in cookie_list:
+                dom = c.get("domain", ".tiktok.com")
+                flag = "TRUE" if dom.startswith(".") else "FALSE"
+                path = c.get("path", "/")
+                lines.append(f"{dom}\t{flag}\t{path}\tTRUE\t0\t{c['name']}\t{c['value']}")
+            COOKIES_FILE.write_text("\n".join(lines), encoding="utf-8")
+
         # Очищаем старую очередь
         _rec_feed_queue.clear()
         _seen_video_ids.clear()
 
+        c_count = len(cookies_dict)
         success_text = (
             "🎉 **Аккаунт TikTok сохранен!**\n\n"
-            f"🔑 **Session ID:** `{sessionid[:8]}...{sessionid[-4:]}`\n\n"
-            "💡 *Для наилучшей работы рекомендаций также рекомендуется выполнить `.tt auth`.*\n"
+            f"🔑 **Session ID:** `{sessionid[:8]}...{sessionid[-4:]}`\n"
+            f"🍪 **Загружено cookies:** `{c_count}` шт.\n\n"
+            "💡 *Все куки будут автоматически добавлены в Playwright до перехода в For You.*\n"
             "🚀 Пиши `.tt` чтобы листать рекомендации!"
         )
         await event.edit(success_text)
@@ -1141,11 +1507,16 @@ async def tiktok_cmd(event: events.NewMessage.Event):
 
     sent_count = 0
     for i in range(count):
-        if count > 1:
-            status_msg = f"🎬 **Загружаю видео ({i + 1}/{count}) из TikTok...**"
-        else:
-            status_msg = "🎬 **Ищу видео из TikTok...**"
-        await event.edit(status_msg)
+        # Если в памяти уже лежит готовое видео, не тратим время на лишний edit в Telegram
+        if not (_rec_feed_queue and _rec_feed_queue[0].get("video_bytes")):
+            if count > 1:
+                status_msg = f"🎬 **Загружаю видео ({i + 1}/{count}) из TikTok...**"
+            else:
+                status_msg = "🎬 **Ищу видео из TikTok...**"
+            try:
+                await event.edit(status_msg)
+            except Exception:
+                pass
 
         video_bytes, meta = await get_next_recommendation_video()
         elapsed = time.time() - t0
@@ -1183,8 +1554,8 @@ async def tiktok_cmd(event: events.NewMessage.Event):
         except Exception as e:
             if "caption is too long" in str(e).lower():
                 try:
-                    video_file.seek(0)
-                    short_cap = f"🎬 **Рекомендации TikTok** • ⚡ {elapsed:.1f}s"
+                    author_part = f"👤 @{meta['author']} • " if meta.get("author") else ""
+                    short_cap = f"{author_part}⚡ {elapsed:.1f}s"
                     if meta.get("original_url"):
                         short_cap += f"\n🔗 [Смотреть в TikTok]({meta['original_url']})"
                     await event.client.send_file(
