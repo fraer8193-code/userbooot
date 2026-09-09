@@ -9,7 +9,6 @@ import urllib.parse
 import requests
 from pathlib import Path
 from telethon import events, Button
-from openai import OpenAI
 from google import genai
 from google.genai import types
 import core
@@ -17,14 +16,13 @@ from core.ai_guard import AIGuard
 from core.loader import logger
 from config import CMD_PREFIX, BOT_USERNAME, BOT_TOKEN, GEMINI_API_KEY
 
-# --- 1. Google Gemini Direct ---
+# --- Google Gemini Direct ---
 DEFAULT_MODEL = "gemini-3.5-flash-lite"
 
-# Ровно 3 модели: Claude Opus 5, Gemini 3.5 Flash Lite, Gemini 3.6 Flash
+# Модели Google Gemini
 AVAILABLE_MODELS = {
     "gemini-3.5-flash-lite": "⚡ Gemini 3.5 Flash Lite",
-    "gemini-3.6-flash": "🚀 Gemini 3.6 Flash",
-    "claude-opus-5": "👑 Claude Opus 5"
+    "gemini-3.6-flash": "🚀 Gemini 3.6 Flash"
 }
 
 # Режимы с эмодзи без лишних описаний
@@ -37,17 +35,6 @@ AVAILABLE_MODES = {
     "murino": "🏙 Мурино",
     "brief": "⚡ Краткий"
 }
-
-# --- 2. GoRouter Pool (Claude Opus 5 с ротацией 3 ключей) ---
-GOROUTER_BASE_URL = "https://gorouter.app/v1"
-GOROUTER_KEYS = [
-    "sk-Ul3Msea1g6vxSuixorOX8XjamclfaAnACDGK9ZdwNY1JHXX8",
-    "sk-R1NGqMia70yx4WodGwWirq5VZzm8moFsI2VnVluZIj4cz5M4",
-    "sk-wr8EIwjdppm48fOj46dBtpAATwe6aW5A0GBMc7IIFEQ9LfO1"
-]
-GOROUTER_MODELS = [
-    "claude-opus-5"
-]
 
 STATE_FILE = Path(__file__).parent.parent / "ai_state.json"
 
@@ -189,12 +176,14 @@ BASE_SECURITY = """
 - Отвечай нормально, полно и связно на любой адекватный запрос.
 4. СТРОГОЕ ВИЗУАЛЬНОЕ ОФОРМЛЕНИЕ И РАЗДЕЛЕНИЕ ПО АБЗАЦАМ:
 - Всегда структурируй свой ответ по логическим абзацам.
-- Завершив одну мысль или абзац, ОБЯЗАТЕЛЬНО ставь пустую строку-разделитель перед следующим абзацем (двойной перенос строки).
+- Завершив одну мысль или блок, ставь пустую строку-разделитель (двойной перенос строки).
 - Категорически запрещено писать сплошным неразделимым полотном (стеной текста).
-- Если используешь списки, выделяй их и отделяй от основного текста пустой строкой.
-5. ПРЯМОЙ И СОДЕРЖАТЕЛЬНЫЙ ОТВЕТ:
-- Отвечай емко, содержательно и по существу (1-3 аккуратных, информативных абзаца с пустыми строками между ними).
-- Не лей пустую воду, сразу переходи к сути и фактам с первой строки.
+- Если используешь списки, отделяй их от основного текста пустой строкой.
+5. ПОЛНОТА И КАЧЕСТВО ВЫПОЛНЕНИЯ ЗАДАЧ:
+- Выполняй запросы пользователя ПОЛНОСТЬЮ, качественно и без искусственных сокращений.
+- Если тебя просят написать код, скрипт, файл, модуль, перевод, анализ или инструкцию — пиши ВСЁ ЦЕЛИКОМ, от начала до конца, без пропусков и без заглушек вроде «// здесь допишите сами».
+- Не лей пустую воду и приветственные клише, сразу переходи к сути задачи.
+- Ответ должен быть законченным, связным и полностью завершенным.
 6. МНОГОЗНАЧНЫЕ ТЕРМИНЫ И ГИБКОСТЬ КОНТЕКСТА (ВАЖНО):
 - Если слово, термин или название имеет несколько разных значений (например: химический элемент, игровой клиент/лаунчер/модификация/чит, музыкальный трек, сленг, персонаж), ВСЕГДА учитывай и кратко перечисляй все основные сферы применения, чтобы не упустить то, что имел в виду пользователь!
 - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО зацикливаться на одном-единственном значении.
@@ -215,12 +204,13 @@ BASE_SECURITY = """
   - Ты ОБЯЗАН ответить информацией о РЕАЛЬНОМ человеке/собеседнике в текущем Telegram-диалоге (имя, юзернейм, Telegram ID, описание био, статус), предоставленной в блоке контекста чата!
   - КАТЕГОРИЧЕСКИ ЗАПРЕЩЕНО отвечать «ты общаешься со мной / с ИИ / с нейросетью». Пользователь спрашивает про реального человека в Telegram!
 11. ГЕНЕРАЦИЯ ФАЙЛОВ И КОДА (КРИТИЧЕСКИ ВАЖНО):
-- Если пользователь просит сделать, написать, сохранить или скинуть ФАЙЛ (например: «сделай файл», «скинь файл», «напиши скрипт файлом», «сделай модуль», «создай файл», «скинь в виде файла»):
-  - Ты ОБЯЗАН обернуть содержимое этого файла в специальный блок:
+- Если пользователь просит сделать, написать, сохранить или скинуть ФАЙЛ, скрипт файлом, модуль файлом (например: «сделай файл», «скинь файл», «напиши скрипт файлом», «сделай модуль», «создай файл», «скинь в виде файла», «код файлом», «напиши модуль»):
+  - Ты ОБЯЗАН обернуть полный рабочий код в специальный блок с указанием имени файла:
     ```file:имя_файла.расширение
-    содержимое файла...
+    полный код или содержимое файла...
     ```
-    (например, ```file:calc.py или ```file:module.py или ```file:data.json).
+    (например, ```file:main.py или ```file:module.py или ```file:bot.py или ```file:config.json).
+  - Напиши весь код файла ПОЛНОСТЬЮ, без сокращений.
   - Перед или после этого блока дай краткий емкий комментарий (1-2 предложения), что файл готов и что он делает.
 """
 
@@ -238,7 +228,8 @@ MODES_PROMPTS = {
 
     "coder": f"""Ты — сеньор-разработчик и хакер высочайшего уровня.
 ТВОЙ СТИЛЬ:
-- Никакой лишней болтовни, только чистый, рабочий код и архитектурные решения.
+- Никакой лишней болтовни, только чистый, полностью рабочий и готовый код и архитектурные решения.
+- Пиши код ЦЕЛИКОМ, без сокращений и заглушек.
 - Всегда указывай стек, давай готовый к копированию код и кратко объясняй логику.
 - Разделяй объяснения и блоки кода пустыми строками для идеальной читаемости.
 - Знаешь все языки (Python, C++, Rust, JS, ASM), reverse-engineering, скрипты и фиксы.
@@ -290,13 +281,13 @@ def format_ai_paragraphs(text: str) -> str:
 
     raw = text.strip()
 
-    # 1. Защищаем блоки кода от модификаций
+    # 1. Защищаем блоки кода от модификаций (включая незакрытые блоки кода в конце текста)
     code_blocks = []
     def save_code(match):
         code_blocks.append(match.group(0))
         return f"__CODE_BLOCK_{len(code_blocks)-1}__"
 
-    processed = re.sub(r"```[\s\S]*?```", save_code, raw)
+    processed = re.sub(r"```[\s\S]*?(?:```|$)", save_code, raw)
     processed = processed.replace("\r\n", "\n").replace("\r", "\n")
 
     # 2. Разбираем на строки и формируем логические абзацы
@@ -314,7 +305,6 @@ def format_ai_paragraphs(text: str) -> str:
             in_list = False
             continue
 
-        # Проверка на элемент списка (•, -, *, 1., 1))
         is_list_item = bool(re.match(r"^(?:[\*\-\•\+]|\d+[\.\)])\s+", trimmed))
 
         if is_list_item:
@@ -333,14 +323,14 @@ def format_ai_paragraphs(text: str) -> str:
     if current_lines:
         blocks.append("\n".join(current_lines))
 
-    # Объединяем смысловые блоки через двойной перенос строки (пустую строку)
     formatted = "\n\n".join(blocks)
 
     # 3. Восстанавливаем сохраненные блоки кода
     for i, cb in enumerate(code_blocks):
+        if cb.startswith("```") and not cb.rstrip().endswith("```"):
+            cb = cb + "\n```"
         formatted = formatted.replace(f"__CODE_BLOCK_{i}__", cb)
 
-    # 4. Нормализуем множественные переносы строк (не более 2 подряд)
     formatted = re.sub(r"\n{3,}", "\n\n", formatted).strip()
     return formatted
 
@@ -353,67 +343,104 @@ def extract_file_attachments(text: str, user_prompt: str = ""):
         return text, []
 
     files = []
-    # 1. Поиск специального блока ```file:filename.ext\n...\n```
-    file_block_pattern = r"```(?:file:([a-zA-Z0-9_\-\.]+))\n([\s\S]*?)```"
+    # 1. Поиск специального блока ```file:filename.ext ... ``` (с поддержкой пробелов, разных переносов строк, и незакрытых блоков)
+    file_block_pattern = r"```(?:file\s*:\s*|filename\s*:\s*)([a-zA-Z0-9_\-\.]+)\r?\n([\s\S]*?)(?:```|$)"
     matches = list(re.finditer(file_block_pattern, text))
     if matches:
         clean_text = re.sub(file_block_pattern, "", text).strip()
         for m in matches:
             fname = m.group(1).strip()
-            content = m.group(2).strip()
+            content = m.group(2).rstrip()
             if fname and content:
                 files.append((fname, content.encode("utf-8")))
+        if not clean_text and files:
+            files_desc = ", ".join([f"`{f[0]}`" for f in files])
+            clean_text = f"📁 **Сгенерированный файл:** {files_desc}\n\n*(Файл отправлен вложением)*"
         return clean_text, files
 
-    # 2. Если в явном блоке не найдено, но пользователь явно просил файл
+    # 2. Если явного тега file: нет, но пользователь явно просил файл/модуль/скрипт
     user_p = (user_prompt or "").lower()
     file_request_keywords = [
         "сделай файл", "скинь файл", "отправь файл", "пришли файл", "скинь файлом", 
         "отправь файлом", "пришли файлом", "создай файл", "напиши файл", "в виде файла",
-        "сделай модуль", "напиши модуль"
+        "сделай модуль", "напиши модуль", "сохрани файл", "сохрани в файл", "файл с кодом",
+        "код файлом", "скрипт файлом", "выгрузи файл", "сделай скрипт файлом", "файлом"
     ]
     wants_file = any(kw in user_p for kw in file_request_keywords)
 
     if wants_file:
-        # Ищем любой блок кода ```extension\n...\n```
-        code_match = re.search(r"```([a-zA-Z0-9_\-]+)?\n([\s\S]*?)```", text)
+        code_match = re.search(r"```([a-zA-Z0-9_\-\.]+)?\r?\n([\s\S]*?)(?:```|$)", text)
         if code_match:
-            lang = (code_match.group(1) or "").lower()
-            code_body = code_match.group(2).strip()
+            lang = (code_match.group(1) or "").lower().strip()
+            code_body = code_match.group(2).rstrip()
             
-            # Определяем имя и расширение
-            ext_map = {
-                "python": ".py", "py": ".py",
-                "javascript": ".js", "js": ".js",
-                "json": ".json",
-                "html": ".html", "htm": ".html",
-                "css": ".css",
-                "bash": ".sh", "sh": ".sh",
-                "txt": ".txt", "text": ".txt",
-                "cpp": ".cpp", "c": ".c",
-                "rust": ".rs", "rs": ".rs"
-            }
-            ext = ext_map.get(lang, ".py" if "def " in code_body or "import " in code_body else ".txt")
-            fname = f"generated_file{ext}"
-            
-            # Если пользователь упоминал имя файла, например calc.py или module.py
-            explicit_fname = re.search(r"\b([a-zA-Z0-9_\-]+\.[a-zA-Z0-9]{1,5})\b", user_prompt)
-            if explicit_fname:
-                fname = explicit_fname.group(1)
-            elif "модул" in user_p:
-                fname = "custom_module.py"
+            if len(code_body) > 15:
+                ext_map = {
+                    "python": ".py", "py": ".py",
+                    "javascript": ".js", "js": ".js",
+                    "typescript": ".ts", "ts": ".ts",
+                    "json": ".json",
+                    "html": ".html", "htm": ".html",
+                    "css": ".css",
+                    "bash": ".sh", "sh": ".sh",
+                    "shell": ".sh",
+                    "txt": ".txt", "text": ".txt",
+                    "cpp": ".cpp", "c": ".c",
+                    "rust": ".rs", "rs": ".rs",
+                    "lua": ".lua", "php": ".php", "sql": ".sql"
+                }
+                
+                fname = None
+                if "." in lang:
+                    fname = lang
+                else:
+                    explicit_fname = re.search(r"\b([a-zA-Z0-9_\-]+\.[a-zA-Z0-9]{1,5})\b", user_prompt)
+                    if explicit_fname:
+                        fname = explicit_fname.group(1)
+                    elif "модул" in user_p:
+                        fname = "custom_module.py"
+                    else:
+                        ext = ext_map.get(lang, ".py" if ("def " in code_body or "import " in code_body) else ".txt")
+                        fname = f"script{ext}"
 
-            clean_text = re.sub(r"```([a-zA-Z0-9_\-]+)?\n([\s\S]*?)```", "", text).strip()
-            if not clean_text:
-                clean_text = f"📁 Сгенерированный файл: `{fname}`"
-            files.append((fname, code_body.encode("utf-8")))
-            return clean_text, files
+                clean_text = re.sub(r"```([a-zA-Z0-9_\-\.]+)?\r?\n([\s\S]*?)(?:```|$)", "", text).strip()
+                if not clean_text:
+                    clean_text = f"📁 **Сгенерированный файл:** `{fname}`\n\n*(Файл отправлен вложением)*"
+                files.append((fname, code_body.encode("utf-8")))
+                return clean_text, files
 
     return text, []
 
+def split_telegram_message(text: str, limit: int = 4000) -> list:
+    """Разбивает длинное сообщение на аккуратные части без обрезания по середине слова/абзаца."""
+    if not text:
+        return [""]
+    if len(text) <= limit:
+        return [text]
+
+    parts = []
+    remaining = text
+    while len(remaining) > limit:
+        split_pos = remaining.rfind("\n\n", 0, limit)
+        if split_pos == -1 or split_pos < limit // 2:
+            split_pos = remaining.rfind("\n", 0, limit)
+        if split_pos == -1 or split_pos < limit // 2:
+            split_pos = remaining.rfind(" ", 0, limit)
+        if split_pos == -1 or split_pos < limit // 2:
+            split_pos = limit
+
+        chunk = remaining[:split_pos].strip()
+        if chunk:
+            parts.append(chunk)
+        remaining = remaining[split_pos:].strip()
+
+    if remaining:
+        parts.append(remaining)
+
+    return parts or [text[:limit]]
+
 # --- Состояние ---
 state = {
-    "active_gorouter_index": 0,
     "auto_reply": True,
     "public_mode": False,
     "censorship": True,
@@ -900,14 +927,14 @@ def get_system_instruction(user_id: int, user_name: str, chat_info: str = "", is
         return f"{uncensored_directive}{sys_instruction}{context_block}"
 
 # ==========================================
-# 2. ВЫЗОВЫ МОДЕЛЕЙ (DIRECT & GOROUTER)
+# 2. ВЫЗОВЫ МОДЕЛЕЙ GOOGLE GEMINI
 # ==========================================
 
 async def _call_gemini_direct(model_name: str, system_text: str, sanitized_prompt: str, history: list, media_item=None) -> str:
     """Вызов Google Gemini Direct API с выбранной моделью (включая фото и видео)."""
     cli = get_gemini_client()
     if not cli:
-        raise RuntimeError("Gemini Client не инициализирован")
+        raise RuntimeError("API-ключ Gemini не настроен. Укажите GEMINI_API_KEY в .env")
 
     censorship_enabled = state.get("censorship", True)
     safety_settings = None
@@ -932,7 +959,7 @@ async def _call_gemini_direct(model_name: str, system_text: str, sanitized_promp
         ]
 
     is_brief = (state.get("current_mode") == "brief")
-    max_tokens = 250 if is_brief else 700
+    max_tokens = 350 if is_brief else 4096
     temp = 0.3 if is_brief else 0.7
 
     config = types.GenerateContentConfig(
@@ -949,7 +976,7 @@ async def _call_gemini_direct(model_name: str, system_text: str, sanitized_promp
 
     text_parts = []
     if not is_brief:
-        for h in history[-2:]:
+        for h in history[-4:]:
             text_parts.append(f"{h['role'].capitalize()}: {h['content']}")
     text_parts.append(f"User: {sanitized_prompt}")
     contents.append("\n\n".join(text_parts))
@@ -968,51 +995,20 @@ async def _call_gemini_direct(model_name: str, system_text: str, sanitized_promp
 
     raise RuntimeError(f"Пустой ответ от {model_name}")
 
-async def _call_gorouter(system_text: str, sanitized_prompt: str, history: list, target_model: str = "claude-opus-5") -> str:
-    """Вызов GoRouter с пулом из 3 ключей."""
-    messages = [{"role": "system", "content": system_text}]
-    messages.extend(history[-4:])
-    messages.append({"role": "user", "content": sanitized_prompt})
-
-    start_idx = state.get("active_gorouter_index", 0) % len(GOROUTER_KEYS)
-    last_err = None
-
-    for attempt in range(len(GOROUTER_KEYS)):
-        current_idx = (start_idx + attempt) % len(GOROUTER_KEYS)
-        api_key = GOROUTER_KEYS[current_idx]
-
-        try:
-            client = OpenAI(api_key=api_key, base_url=GOROUTER_BASE_URL, timeout=7.0, max_retries=0)
-            response = await asyncio.to_thread(
-                client.chat.completions.create,
-                model=target_model,
-                messages=messages,
-                temperature=0.7,
-                max_tokens=800
-            )
-            answer = response.choices[0].message.content
-            if answer and answer.strip():
-                if state.get("active_gorouter_index") != current_idx:
-                    state["active_gorouter_index"] = current_idx
-                    save_state()
-                return answer.strip()
-        except Exception as e:
-            last_err = str(e)
-            if "401" in last_err or "403" in last_err or "quota" in last_err.lower() or "insufficient" in last_err.lower():
-                continue
-            continue
-
-    raise RuntimeError(last_err or "Все ключи GoRouter недоступны")
-
 async def generate_ai_response(user_id: int, user_name: str, sanitized_prompt: str, chat_info: str = "", is_owner: bool = False, media_item=None) -> str:
     """
     Генерация ответа:
-    1. Попытка вызова активной модели (gemini-3.5-flash-lite / gemini-3.6-flash / claude-opus-5).
-    2. При наличии медиа (фото/видео) — гарантированное использование мультимодальных моделей Gemini.
-    3. При сбое автоматический переход на резервную Gemini модель или GoRouter.
+    1. Попытка вызова активной модели Gemini.
+    2. При наличии медиа (фото/видео) — поддержка мультимодальности Gemini.
+    3. При сбое автоматический переход на надежные резервные модели Gemini.
     """
     mode = state.get("current_mode", "default")
     current_model = state.get("current_model", DEFAULT_MODEL)
+    if current_model not in AVAILABLE_MODELS:
+        current_model = DEFAULT_MODEL
+        state["current_model"] = current_model
+        save_state()
+
     system_text = get_system_instruction(user_id, user_name, chat_info, is_owner=is_owner)
 
     history_key = f"{user_id}_{mode}"
@@ -1022,47 +1018,34 @@ async def generate_ai_response(user_id: int, user_name: str, sanitized_prompt: s
     history = user_histories[history_key]
     last_error = None
 
-    # Список моделей для вызова по порядку приоритета
+    # Порядок попыток моделей Gemini
+    candidate_order = [current_model, "gemini-3.6-flash" if current_model != "gemini-3.6-flash" else "gemini-3.5-flash-lite"]
     candidate_models = []
-    if media_item is not None:
-        # Для фото и видео используем исключительно мультимодальные модели Gemini
-        if current_model == "gemini-3.6-flash":
-            candidate_models.append(("gemini", "gemini-3.6-flash"))
-            candidate_models.append(("gemini", "gemini-3.5-flash-lite"))
-        else:
-            candidate_models.append(("gemini", "gemini-3.5-flash-lite"))
-            candidate_models.append(("gemini", "gemini-3.6-flash"))
-    else:
-        if current_model.startswith("gemini"):
-            candidate_models.append(("gemini", current_model))
-            alt_gemini = "gemini-3.6-flash" if current_model != "gemini-3.6-flash" else "gemini-3.5-flash-lite"
-            candidate_models.append(("gemini", alt_gemini))
-            candidate_models.append(("gorouter", "claude-opus-5"))
-        else:
-            candidate_models.append(("gorouter", "claude-opus-5"))
-            candidate_models.append(("gemini", "gemini-3.5-flash-lite"))
-            candidate_models.append(("gemini", "gemini-3.6-flash"))
+    for m in candidate_order:
+        if m not in candidate_models:
+            candidate_models.append(m)
 
-    for provider, m_name in candidate_models:
+    for m_name in candidate_models:
         try:
-            if provider == "gemini":
-                answer = await _call_gemini_direct(m_name, system_text, sanitized_prompt, history, media_item=media_item)
-            else:
-                answer = await _call_gorouter(system_text, sanitized_prompt, history, target_model=m_name)
-            
+            answer = await _call_gemini_direct(m_name, system_text, sanitized_prompt, history, media_item=media_item)
             if answer and answer.strip():
                 history.append({"role": "user", "content": sanitized_prompt})
                 history.append({"role": "assistant", "content": answer})
                 return answer
         except Exception as e:
             last_error = str(e)
-            logger.warning(f"[AI] Модель {provider}:{m_name} вернула ошибку: {last_error}")
+            logger.warning(f"[AI] Модель {m_name} вернула ошибку: {last_error}")
             continue
 
     if last_error and ("429" in last_error or "RESOURCE_EXHAUSTED" in last_error or "quota" in last_error.lower()):
         return "⏳ **Лимит запросов исчерпан.** Пожалуйста, подождите 15–30 секунд."
-    if last_error and ("401" in last_error or "API_KEY_INVALID" in last_error or "Unauthorized" in last_error):
-        return f"❌ **Ошибка API-ключа Gemini:** `{last_error}`\n💡 Проверьте переменную `GEMINI_API_KEY` в настройках хостинга."
+    if last_error and ("401" in last_error or "API_KEY_INVALID" in last_error or "Unauthorized" in last_error or "UNAUTHENTICATED" in last_error or "ACCESS_TOKEN_TYPE_UNSUPPORTED" in last_error):
+        return (
+            f"❌ **Ошибка API-ключа Gemini (401 Unauthorized):**\n`{last_error}`\n\n"
+            "💡 **Как исправить:**\n"
+            "1. Получите бесплатный ключ на https://aistudio.google.com/app/apikey (он начинается с `AIzaSy...`).\n"
+            "2. Укажите его в переменной `GEMINI_API_KEY` в файле `.env` или настройках хостинга."
+        )
     return f"❌ **Ошибка нейросети:** `{last_error}`"
 
 # ==========================================
@@ -1289,18 +1272,29 @@ async def handle_incoming_ai(event: events.NewMessage.Event):
         display_prompt = clean_question if len(clean_question) <= 120 else clean_question[:117] + "..."
 
         clean_ans, attached_files = extract_file_attachments(response_text, user_prompt=prompt)
-        result = f"🤖 **AI:**\n\n{clean_ans}\n\n❓ **Вопрос:** `{display_prompt}`\n⏱ **Время ответа:** `{elapsed:.2f} сек`"
-
-        if len(result) > 4096:
-            result = result[:4000] + "\n\n*(Ответ обрезан из-за лимита длины Telegram)*"
+        base_header = "🤖 **AI:**\n\n"
+        base_footer = f"\n\n❓ **Вопрос:** `{display_prompt}`\n⏱ **Время ответа:** `{elapsed:.2f} сек`"
+        
+        full_text = f"{base_header}{clean_ans}{base_footer}"
+        chunks = split_telegram_message(full_text, limit=4000)
 
         try:
-            await event.reply(result)
+            for i, chunk in enumerate(chunks):
+                if i == 0:
+                    await event.reply(chunk)
+                else:
+                    await event.respond(chunk)
+
             if attached_files:
                 for fname, fbytes in attached_files:
                     bio = io.BytesIO(fbytes)
                     bio.name = fname
-                    await event.reply(file=bio, message=f"📄 **Файл:** `{fname}`")
+                    await event.client.send_file(
+                        event.chat_id,
+                        file=bio,
+                        caption=f"📄 **Файл:** `{fname}`",
+                        reply_to=event.id
+                    )
         except Exception as e:
             logger.error(f"[AI] Ошибка отправки ответа: {e}")
     except Exception as e:
@@ -1431,7 +1425,7 @@ async def aimodel_cmd(event: events.NewMessage.Event):
         models_list = "\n".join([f"• `{k}` — {v}" + (" *(активна)*" if k == current else "") for k, v in AVAILABLE_MODELS.items()])
         text = (
             f"⚡ **Текущая модель AI:** `{current}`\n\n"
-            f"**Доступные модели (всего 3):**\n"
+            f"**Доступные модели:**\n"
             f"{models_list}\n\n"
             f"💡 Для смены модели: `.aimodel <название>`\n"
             f"💡 Или откройте `.aisettings` для кнопок"
@@ -1787,18 +1781,26 @@ async def ai_cmd(event: events.NewMessage.Event):
 
         # Проверяем наличие сгенерированных файлов для отправки
         clean_ans, attached_files = extract_file_attachments(response_text, user_prompt=prompt)
-        result = f"🤖 **AI:**\n\n{clean_ans}\n\n❓ **Вопрос:** `{display_prompt}`\n⏱ **Время ответа:** `{elapsed:.2f} сек`"
+        base_header = "🤖 **AI:**\n\n"
+        base_footer = f"\n\n❓ **Вопрос:** `{display_prompt}`\n⏱ **Время ответа:** `{elapsed:.2f} сек`"
+        
+        full_text = f"{base_header}{clean_ans}{base_footer}"
+        chunks = split_telegram_message(full_text, limit=4000)
 
-        if len(result) > 4096:
-            result = result[:4000] + "\n\n*(Ответ обрезан из-за лимита длины Telegram)*"
-
-        await event.edit(result)
+        await event.edit(chunks[0])
+        for chunk in chunks[1:]:
+            await event.respond(chunk)
 
         if attached_files:
             for fname, fbytes in attached_files:
                 bio = io.BytesIO(fbytes)
                 bio.name = fname
-                await event.respond(file=bio, message=f"📄 **Файл:** `{fname}`")
+                await event.client.send_file(
+                    event.chat_id,
+                    file=bio,
+                    caption=f"📄 **Файл:** `{fname}`",
+                    reply_to=event.id
+                )
     except Exception as e:
         try:
             await event.edit(f"❌ **Ошибка:** `{e}`")

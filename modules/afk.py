@@ -47,9 +47,6 @@ STATE_FILE = Path("afk_state.json")
 
 # Ключи и настройки AI
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GOROUTER_BASE_URL = os.getenv("GOROUTER_BASE_URL", "https://gorouter.app/v1")
-gorouter_keys_env = os.getenv("GOROUTER_KEYS", "")
-GOROUTER_KEYS = [k.strip() for k in gorouter_keys_env.split(",") if k.strip()] if gorouter_keys_env else []
 
 # Состояние AFK
 afk_state = {
@@ -391,7 +388,7 @@ async def generate_reply(chat_id: int, incoming_text: str, reason: str, mode: st
     # Для режима aiafk (открытый ассистент) используем ассистент-промпт
     system_prompt = build_aiafk_prompt(reason)
 
-    # 1. Попытка через Google GenAI (модель Lite по умолчанию)
+    # 1. Попытка через Google GenAI
     for g_model in ["gemini-3.5-flash-lite", "gemini-3.6-flash"]:
         try:
             answer = await _call_gemini_genai(g_model, system_prompt, incoming_text, history)
@@ -402,33 +399,6 @@ async def generate_reply(chat_id: int, incoming_text: str, reason: str, mode: st
                 return reply
         except Exception as e:
             logger.warning(f"GenAI Client ({g_model}) failed: {e}")
-
-    # 2. Попытка через GoRouter
-    for api_key in GOROUTER_KEYS:
-        try:
-            messages = [{"role": "system", "content": system_prompt}]
-            messages.extend(history[-4:])
-            messages.append({"role": "user", "content": incoming_text})
-
-            answer = None
-            if OpenAI:
-                client = OpenAI(api_key=api_key, base_url=GOROUTER_BASE_URL, timeout=8.0)
-                response = await asyncio.to_thread(
-                    client.chat.completions.create,
-                    model="claude-opus-5",
-                    messages=messages,
-                    temperature=0.75,
-                    max_tokens=200
-                )
-                answer = response.choices[0].message.content
-
-            if answer and answer.strip():
-                reply = clean_ai_reply(answer.strip(), mode=mode)
-                history.append({"role": "user", "content": incoming_text})
-                history.append({"role": "assistant", "content": reply})
-                return reply
-        except Exception:
-            continue
 
     if mode == "aiafk":
         return f"🤖 Привет! Владелец аккаунта сейчас отсутствует ({reason}) и ответит тебе лично позже! ✨"
