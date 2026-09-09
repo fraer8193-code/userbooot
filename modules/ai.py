@@ -17,7 +17,7 @@ from core.loader import logger
 from config import CMD_PREFIX, BOT_USERNAME, BOT_TOKEN, GEMINI_API_KEY, GEMINI_API_KEYS
 
 # --- Google Gemini Direct ---
-DEFAULT_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
 # Модели Google Gemini
 AVAILABLE_MODELS = {
@@ -493,15 +493,17 @@ def load_state():
             with open(STATE_FILE, "r", encoding="utf-8") as f:
                 saved = json.load(f)
                 state.update(saved)
-                if "model" in saved and "current_model" not in saved:
-                    state["current_model"] = saved["model"]
-                if state.get("current_model") not in AVAILABLE_MODELS:
-                    state["current_model"] = DEFAULT_MODEL
+                m = saved.get("current_model") or saved.get("model") or DEFAULT_MODEL
+                if m not in AVAILABLE_MODELS:
+                    m = DEFAULT_MODEL
+                state["current_model"] = m
+                state["model"] = m
         except Exception:
             pass
 
 def save_state():
     try:
+        state["model"] = state.get("current_model", DEFAULT_MODEL)
         with open(STATE_FILE, "w", encoding="utf-8") as f:
             json.dump(state, f, ensure_ascii=False, indent=2)
     except Exception:
@@ -693,6 +695,7 @@ async def ai_callback_handler(event: events.CallbackQuery.Event):
             chosen = parts[2] if len(parts) > 2 else ""
             if chosen in AVAILABLE_MODELS:
                 state["current_model"] = chosen
+                state["model"] = chosen
                 save_state()
                 user_histories.clear()
                 await event.answer(f"Модель: {AVAILABLE_MODELS[chosen]}", alert=False)
@@ -1482,14 +1485,24 @@ async def aimodel_cmd(event: events.NewMessage.Event):
         return
 
     chosen = args[1].lower().strip()
+    alias_map = {
+        "3.5": "gemini-3.5-flash-lite",
+        "lite": "gemini-3.5-flash-lite",
+        "flash-lite": "gemini-3.5-flash-lite",
+        "flash_lite": "gemini-3.5-flash-lite",
+        "3.6": "gemini-3.6-flash",
+        "flash": "gemini-3.6-flash"
+    }
+    chosen = alias_map.get(chosen, chosen)
     if chosen not in AVAILABLE_MODELS:
         models_keys = ", ".join([f"`{k}`" for k in AVAILABLE_MODELS.keys()])
-        await event.edit(f"❌ **Неизвестная модель:** `{chosen}`\nДоступны только: {models_keys}")
+        await event.edit(f"❌ **Неизвестная модель:** `{chosen}`\nДоступны: {models_keys} (или алиасы: `3.5`, `3.6`, `lite`)")
         await asyncio.sleep(3)
         await event.delete()
         return
 
     state["current_model"] = chosen
+    state["model"] = chosen
     save_state()
     user_histories.clear()
     await event.edit(f"✅ **Модель AI изменена на:** {AVAILABLE_MODELS[chosen]}")
