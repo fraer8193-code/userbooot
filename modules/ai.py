@@ -1032,8 +1032,12 @@ async def generate_ai_response(user_id: int, user_name: str, sanitized_prompt: s
     history = user_histories[history_key]
     last_error = None
 
-    # Порядок попыток моделей Gemini
-    candidate_order = [current_model, "gemini-3.6-flash" if current_model != "gemini-3.6-flash" else "gemini-3.5-flash-lite"]
+    # Порядок попыток моделей Gemini (включая резервную gemini-flash-latest при исчерпании квоты)
+    candidate_order = [
+        current_model,
+        "gemini-3.6-flash" if current_model != "gemini-3.6-flash" else "gemini-3.5-flash-lite",
+        "gemini-flash-latest"
+    ]
     candidate_models = []
     for m in candidate_order:
         if m not in candidate_models:

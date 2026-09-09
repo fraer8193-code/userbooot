@@ -389,7 +389,7 @@ async def generate_reply(chat_id: int, incoming_text: str, reason: str, mode: st
     system_prompt = build_aiafk_prompt(reason)
 
     # 1. Попытка через Google GenAI
-    for g_model in ["gemini-3.5-flash-lite", "gemini-3.6-flash"]:
+    for g_model in ["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-flash-latest"]:
         try:
             answer = await _call_gemini_genai(g_model, system_prompt, incoming_text, history)
             if answer and answer.strip():

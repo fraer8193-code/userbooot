@@ -40,13 +40,18 @@ Output ONLY the final English prompt without any explanations, prefixes, or quot
             max_output_tokens=120,
             automatic_function_calling=types.AutomaticFunctionCallingConfig(disable=True)
         )
-        resp = client.models.generate_content(
-            model="gemini-3.5-flash-lite",
-            contents=ru_prompt,
-            config=config
-        )
-        text = resp.text.strip().replace('"', '').replace("'", "")
-        return text if text else ru_prompt
+        resp = None
+        for m in ["gemini-3.5-flash-lite", "gemini-flash-latest"]:
+            try:
+                resp = client.models.generate_content(model=m, contents=ru_prompt, config=config)
+                if resp and resp.text:
+                    break
+            except Exception:
+                continue
+        if resp and resp.text:
+            text = resp.text.strip().replace('"', '').replace("'", "")
+            return text if text else ru_prompt
+        return ru_prompt
     except Exception:
         return ru_prompt
 
