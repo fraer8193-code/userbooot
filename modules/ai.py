@@ -388,28 +388,35 @@ def format_ai_paragraphs(text: str) -> str:
 def extract_file_attachments(text: str, user_prompt: str = ""):
     """
     Проверяет, содержит ли ответ файл или просил ли пользователь файл.
-    Возвращает (clean_text, files_list), где files_list это список кортежей (filename, file_bytes).
+    Возвращает (display_text, files_list), где files_list это список кортежей (filename, file_bytes).
+    Код ВСЕГДА сохраняется в тексте сообщения в виде аккуратного markdown-блока!
     """
     if not text:
         return text, []
 
     files = []
-    # 1. Поиск специального блока ```file:filename.ext ... ``` (с поддержкой пробелов, разных переносов строк, и незакрытых блоков)
+    # 1. Поиск специального блока ```file:filename.ext ... ```
     file_block_pattern = r"```(?:file\s*:\s*|filename\s*:\s*)([a-zA-Z0-9_\-\.]+)\r?\n([\s\S]*?)(?:```|$)"
     matches = list(re.finditer(file_block_pattern, text))
     if matches:
-        clean_text = re.sub(file_block_pattern, "", text).strip()
         for m in matches:
             fname = m.group(1).strip()
             content = m.group(2).rstrip()
             if fname and content:
                 files.append((fname, content.encode("utf-8")))
-        if not clean_text and files:
-            files_desc = ", ".join([f"`{f[0]}`" for f in files])
-            clean_text = f"📁 **Сгенерированный файл:** {files_desc}\n\n*(Файл отправлен вложением)*"
-        return clean_text, files
 
-    # 2. Если явного тега file: нет, но пользователь явно просил файл/модуль/скрипт
+        # Преобразуем тег file:filename.ext в нормальный подсвеченный блок кода (НЕ удаляя код!)
+        def _replace_file_tag(m):
+            fname = m.group(1).strip()
+            content = m.group(2).rstrip()
+            ext = Path(fname).suffix.lstrip(".").lower()
+            lang = "python" if ext in ("py", "pyw") else (ext or "text")
+            return f"```{lang}\n{content}\n```"
+
+        display_text = re.sub(file_block_pattern, _replace_file_tag, text).strip()
+        return display_text, files
+
+    # 2. Если явного тега file: нет, но пользователь просил файл/модуль/скрипт
     user_p = (user_prompt or "").lower()
     file_request_keywords = [
         "сделай файл", "скинь файл", "отправь файл", "пришли файл", "скинь файлом", 
@@ -454,13 +461,11 @@ def extract_file_attachments(text: str, user_prompt: str = ""):
                         ext = ext_map.get(lang, ".py" if ("def " in code_body or "import " in code_body) else ".txt")
                         fname = f"script{ext}"
 
-                clean_text = re.sub(r"```([a-zA-Z0-9_\-\.]+)?\r?\n([\s\S]*?)(?:```|$)", "", text).strip()
-                if not clean_text:
-                    clean_text = f"📁 **Сгенерированный файл:** `{fname}`\n\n*(Файл отправлен вложением)*"
                 files.append((fname, code_body.encode("utf-8")))
-                return clean_text, files
+                return text, files
 
     return text, []
+
 
 def split_telegram_message(text: str, limit: int = 4000) -> list:
     """Разбивает длинное сообщение на аккуратные части без обрезания по середине слова/абзаца."""
@@ -1933,14 +1938,17 @@ async def ai_cmd(event: events.NewMessage.Event):
 
         if attached_files:
             for fname, fbytes in attached_files:
-                bio = io.BytesIO(fbytes)
-                bio.name = fname
-                await event.client.send_file(
-                    event.chat_id,
-                    file=bio,
-                    caption=f"📄 **Файл:** `{fname}`",
-                    reply_to=event.id
-                )
+                try:
+                    bio = io.BytesIO(fbytes)
+                    bio.name = fname
+                    bio.seek(0)
+                    await event.client.send_file(
+                        event.chat_id,
+                        file=bio,
+                        caption=f"📄 **Файл:** `{fname}`"
+                    )
+                except Exception as fe:
+                    logger.warning(f"Error sending file {fname}: {fe}")
     except Exception as e:
         try:
             await event.edit(f"❌ **Ошибка:** `{e}`")
