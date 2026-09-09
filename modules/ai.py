@@ -1226,6 +1226,22 @@ async def handle_incoming_ai(event: events.NewMessage.Event):
 
                 reply_text = (getattr(reply, "message", "") or getattr(reply, "text", "") or getattr(reply, "raw_text", "") or "").strip()
 
+                # Считываем текст/код из прикрепленных файлов (документов) в реплае
+                if reply.file and not target_media_type:
+                    fname = getattr(reply.file, "name", "") or ""
+                    mime = (getattr(reply.file, "mime_type", "") or "").lower()
+                    ext = (getattr(reply.file, "ext", "") or Path(fname).suffix or "").lower()
+                    text_exts = (".py", ".txt", ".json", ".log", ".md", ".js", ".ts", ".html", ".css", ".sh", ".yaml", ".yml", ".c", ".cpp", ".h", ".cs", ".go", ".rs", ".php", ".rb", ".sql", ".env")
+                    if ext in text_exts or mime.startswith("text/") or "json" in mime or "javascript" in mime:
+                        try:
+                            f_bytes = await reply.download_media(bytes)
+                            if f_bytes:
+                                f_decoded = f_bytes.decode("utf-8", errors="replace").strip()
+                                f_label = f"[Файл {fname}]:" if fname else "[Прикрепленный файл]:"
+                                reply_text = f"{reply_text}\n\n{f_label}\n```{ext.lstrip('.') or 'text'}\n{f_decoded}\n```" if reply_text else f"{f_label}\n```{ext.lstrip('.') or 'text'}\n{f_decoded}\n```"
+                        except Exception:
+                            pass
+
                 if target_media_type:
                     media_name = "фото" if target_media_type == "photo" else "видео"
                     if extra_query:
@@ -1235,11 +1251,18 @@ async def handle_incoming_ai(event: events.NewMessage.Event):
                     else:
                         prompt = f"Что на этом {media_name}? Опиши происходящее подробно и ответь собеседнику."
                 else:
+                    is_self = (getattr(reply, "sender_id", 0) == _me_id or getattr(reply, "out", False))
                     if reply_text:
                         if extra_query:
-                            prompt = f"Собеседник написал: \"{reply_text}\"\n\nОтветь ему прямо и по сути, учитывая запрос: {extra_query}"
+                            if is_self:
+                                prompt = f"[Контекст предыдущего сообщения/кода]:\n{reply_text}\n\n[Задача]:\n{extra_query}"
+                            else:
+                                prompt = f"[Сообщение собеседника {user_name}]:\n{reply_text}\n\n[Задача]:\n{extra_query}"
                         else:
-                            prompt = f"Собеседник написал: \"{reply_text}\"\n\nОтветь прямо на это сообщение (веди прямой диалог с собеседником, не пересказывай его слова, отвечай сразу по сути)."
+                            if is_self:
+                                prompt = f"[Предыдущее сообщение]:\n{reply_text}\n\nПродолжи мысль или ответь по существу."
+                            else:
+                                prompt = f"[Сообщение собеседника {user_name}]:\n{reply_text}\n\nОтветь прямо на это сообщение (веди прямой диалог с собеседником, отвечай сразу по сути)."
                     elif extra_query:
                         prompt = extra_query
             else:
@@ -1770,6 +1793,24 @@ async def ai_cmd(event: events.NewMessage.Event):
             target_media_msg = event
             target_media_type = event_media
 
+        # Считываем текст/код из прикрепленных файлов (документов) в сообщении или реплае
+        attached_doc_text = ""
+        doc_msg = reply if (reply and getattr(reply, "file", None)) else (event if getattr(event, "file", None) else None)
+        if doc_msg and doc_msg.file and not target_media_type:
+            fname = getattr(doc_msg.file, "name", "") or ""
+            mime = (getattr(doc_msg.file, "mime_type", "") or "").lower()
+            ext = (getattr(doc_msg.file, "ext", "") or Path(fname).suffix or "").lower()
+            text_exts = (".py", ".txt", ".json", ".log", ".md", ".js", ".ts", ".html", ".css", ".sh", ".yaml", ".yml", ".c", ".cpp", ".h", ".cs", ".go", ".rs", ".php", ".rb", ".sql", ".env")
+            if ext in text_exts or mime.startswith("text/") or "json" in mime or "javascript" in mime:
+                try:
+                    file_bytes = await doc_msg.download_media(bytes)
+                    if file_bytes:
+                        decoded = file_bytes.decode("utf-8", errors="replace").strip()
+                        doc_label = f"Файл '{fname}'" if fname else "Прикрепленный файл"
+                        attached_doc_text = f"[{doc_label}]:\n```{ext.lstrip('.') or 'text'}\n{decoded}\n```"
+                except Exception as e:
+                    logger.warning(f"Failed to read attached file: {e}")
+
         prompt = ""
         media_name = "фото" if target_media_type == "photo" else "видео"
 
@@ -1796,19 +1837,41 @@ async def ai_cmd(event: events.NewMessage.Event):
                 target_name = getattr(reply_sender, "first_name", "") or getattr(reply_sender, "title", "") or "Пользователь"
 
             reply_text = (getattr(reply, "raw_text", "") or getattr(reply, "text", "") or (reply.message if isinstance(getattr(reply, "message", None), str) else "") or "").strip()
+            if attached_doc_text:
+                reply_text = f"{reply_text}\n\n{attached_doc_text}" if reply_text else attached_doc_text
+
+            is_self_reply = False
+            try:
+                is_self_reply = (getattr(reply, "out", False) or getattr(reply, "sender_id", 0) == _me_id or getattr(reply, "sender_id", 0) == user_id)
+            except Exception:
+                pass
 
             if reply_text:
                 if extra_text:
-                    prompt = f"Собеседник написал: \"{reply_text}\"\n\nОтветь прямо и по существу, выполнив запрос: {extra_text}"
+                    if is_self_reply:
+                        prompt = (
+                            f"[Контекст предыдущего сообщения/кода]:\n{reply_text}\n\n"
+                            f"[Задача пользователя к этому контексту]:\n{extra_text}"
+                        )
+                    else:
+                        prompt = (
+                            f"[Сообщение / код от {target_name}]:\n{reply_text}\n\n"
+                            f"[Задача пользователя по отношению к этому сообщению]:\n{extra_text}"
+                        )
                 else:
-                    prompt = f"Собеседник написал: \"{reply_text}\"\n\nОтветь прямо на это сообщение (веди прямой диалог с собеседником, не пересказывай его слова от третьего лица, отвечай сразу по сути)."
+                    if is_self_reply:
+                        prompt = f"[Продолжи или исправь предыдущее сообщение]:\n{reply_text}"
+                    else:
+                        prompt = f"[Сообщение от {target_name}]:\n{reply_text}\n\nОтветь прямо на это сообщение (веди прямой диалог, не пересказывай его слова, отвечай сразу по сути)."
             elif extra_text:
                 prompt = extra_text
         elif extra_text:
-            prompt = extra_text
+            prompt = f"{extra_text}\n\n{attached_doc_text}" if attached_doc_text else extra_text
+        elif attached_doc_text:
+            prompt = f"Проанализируй этот файл и объясни его содержимое:\n\n{attached_doc_text}"
 
         if not prompt and not target_media_msg:
-            await event.edit("💡 **Использование:** `.ai <текст вопроса>` (или напишите `.ai` в ответ на сообщение/фото/видео)")
+            await event.edit("💡 **Использование:** `.ai <текст вопроса>` (или напишите `.ai` в ответ на сообщение/фото/видео/файл)")
             await asyncio.sleep(3)
             await event.delete()
             return
@@ -1828,7 +1891,7 @@ async def ai_cmd(event: events.NewMessage.Event):
                 return
             media_item, cleanup_cb = await prepare_media_for_gemini(target_media_msg, target_media_type, cli)
 
-        is_attack, sanitized_prompt = AIGuard.inspect_prompt(prompt)
+        is_attack, sanitized_prompt = AIGuard.inspect_prompt(prompt, is_owner=True)
 
         t0 = time.time()
         try:

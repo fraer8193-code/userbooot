@@ -56,7 +56,7 @@ def is_hex(s: str) -> bool:
 
 class AIGuard:
     @staticmethod
-    def inspect_prompt(prompt: str) -> Tuple[bool, str]:
+    def inspect_prompt(prompt: str, is_owner: bool = False) -> Tuple[bool, str]:
         """
         Проверяет пользовательский промпт до отправки в модель.
         Возвращает (is_attack: bool, sanitized_prompt: str)
@@ -65,6 +65,11 @@ class AIGuard:
             return False, ""
 
         text = prompt.strip()
+
+        # Владелец бота имеет доверенный доступ: его код, ошибки и инструкции никогда не цензурируются
+        if is_owner:
+            return False, f"<user_message>\n{text}\n</user_message>"
+
         is_attack = False
 
         # 1. Проверка на регулярные выражения и атаки
