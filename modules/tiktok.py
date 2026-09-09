@@ -905,19 +905,22 @@ async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
     return None, {}
 
 def _format_caption(meta: dict, elapsed: float, is_fyp: bool = False) -> str:
-    """Форматирует красивый текст для сообщения."""
+    """Форматирует красивый текст для сообщения (с защитой от лимита Telegram 1024 символа)."""
     parts = []
 
     badge = "🎬 **Рекомендации TikTok (Беларусь/СНГ)**" if is_fyp else "🎬 **Видео из TikTok**"
     if meta.get("author"):
         profile_url = f"https://www.tiktok.com/@{meta['author']}"
-        author_display = meta.get("author_name") or meta["author"]
+        author_display = str(meta.get("author_name") or meta["author"])[:40]
         parts.append(f"{badge} • [{author_display}]({profile_url})")
     else:
         parts.append(badge)
 
-    title = meta.get("title", "").strip()
+    title = str(meta.get("title", "")).strip()
     if title:
+        # Лимит Telegram на подпись к медиа строго 1024 символа
+        if len(title) > 350:
+            title = title[:345] + "..."
         parts.append(f"\n📝 {title}")
 
     info_bits = []
@@ -927,7 +930,7 @@ def _format_caption(meta: dict, elapsed: float, is_fyp: bool = False) -> str:
         info_bits.append(f"⏱ {mins}:{secs:02d}" if mins else f"⏱ {secs}с")
 
     if meta.get("music"):
-        music = meta["music"][:35]
+        music = str(meta["music"])[:35]
         info_bits.append(f"🎵 {music}")
 
     info_bits.append(f"⚡ {elapsed:.1f}s")
@@ -937,7 +940,10 @@ def _format_caption(meta: dict, elapsed: float, is_fyp: bool = False) -> str:
     if meta.get("original_url"):
         parts.append(f"\n🔗 [Смотреть в TikTok]({meta['original_url']})")
 
-    return "\n".join(parts)
+    res = "\n".join(parts)
+    if len(res) > 950:
+        res = res[:940] + "..."
+    return res
 
 # ===================== КОМАНДЫ ЮЗЕРБОТА =====================
 
@@ -1092,7 +1098,24 @@ async def tiktok_cmd(event: events.NewMessage.Event):
             )
             await event.delete()
         except Exception as e:
-            await event.edit(f"❌ **Ошибка при отправке:** `{e}`")
+            if "caption is too long" in str(e).lower():
+                try:
+                    video_file.seek(0)
+                    short_cap = f"🎬 **TikTok** • ⚡ {elapsed:.1f}s"
+                    if meta.get("original_url"):
+                        short_cap += f"\n🔗 [Смотреть в TikTok]({meta['original_url']})"
+                    await event.client.send_file(
+                        event.chat_id,
+                        video_file,
+                        caption=short_cap,
+                        reply_to=event.reply_to_msg_id,
+                        supports_streaming=True
+                    )
+                    await event.delete()
+                except Exception as e2:
+                    await event.edit(f"❌ **Ошибка при отправке:** `{e2}`")
+            else:
+                await event.edit(f"❌ **Ошибка при отправке:** `{e}`")
         return
 
     # --- РЕЖИМ 2: ЛИСТАНИЕ РЕКОМЕНДАЦИЙ (FYP) ---
@@ -1152,8 +1175,26 @@ async def tiktok_cmd(event: events.NewMessage.Event):
             )
             sent_count += 1
         except Exception as e:
-            await event.edit(f"❌ **Ошибка при отправке:** `{e}`")
-            break
+            if "caption is too long" in str(e).lower():
+                try:
+                    video_file.seek(0)
+                    short_cap = f"🎬 **Рекомендации TikTok** • ⚡ {elapsed:.1f}s"
+                    if meta.get("original_url"):
+                        short_cap += f"\n🔗 [Смотреть в TikTok]({meta['original_url']})"
+                    await event.client.send_file(
+                        event.chat_id,
+                        video_file,
+                        caption=short_cap,
+                        reply_to=event.reply_to_msg_id,
+                        supports_streaming=True
+                    )
+                    sent_count += 1
+                except Exception as e2:
+                    await event.edit(f"❌ **Ошибка при отправке:** `{e2}`")
+                    break
+            else:
+                await event.edit(f"❌ **Ошибка при отправке:** `{e}`")
+                break
 
         # Пауза между отправкой видео в чат
         if i + 1 < count:
