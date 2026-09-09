@@ -83,7 +83,8 @@ HEADERS = {
 STEALTH_JS = """
 Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
 window.chrome = { runtime: {}, loadTimes: function() {}, csi: function() {}, app: {} };
-Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'en-US', 'en'] });
+Object.defineProperty(navigator, 'languages', { get: () => ['ru-RU', 'ru', 'be-BY', 'be', 'en-US', 'en'] });
+Object.defineProperty(navigator, 'language', { get: () => 'ru-RU' });
 Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
 """
 
@@ -96,6 +97,95 @@ BROWSER_ARGS = [
     "--password-store=basic"
 ]
 BROWSER_IGNORE_DEFAULT_ARGS = ["--enable-automation"]
+
+# ===================== РЕГИОНАЛЬНЫЕ НАСТРОЙКИ И ФИЛЬТРЫ =====================
+
+BELARUS_COORDINATES = {"latitude": 53.9006, "longitude": 27.5590}
+BELARUS_TIMEZONE = "Europe/Minsk"
+BELARUS_LOCALE = "ru-RU"
+
+# Запрещенные восточные / индийские / арабские алфавиты
+FOREIGN_SCRIPTS_RE = re.compile(
+    r'[\u0900-\u0DFF'  # Индийские (Деванагари, Бенгали, Гуджарати, Тамильский, Телугу, Каннада, Малаялам, Сингальский)
+    r'\u0E00-\u0EFF'  # Тайский, Лаосский
+    r'\u1000-\u109F'  # Мьянма/Бирманский
+    r'\u1780-\u17FF'  # Кхмерский
+    r'\u0600-\u06FF\u0750-\u077F\uFB50-\uFDFF\uFE70-\uFEFF'  # Арабский, Урду, Персидский
+    r']'
+)
+
+# Кириллица (русский, белорусский с і, ў, украинский)
+CYRILLIC_RE = re.compile(r'[а-яА-ЯёЁіІўЎґҐ]')
+
+# Стоп-слова зарубежного / индийского / азиатского мусора
+NON_CIS_BAD_KEYWORDS = {
+    'hindi', 'bhojpuri', 'desi', 'shayari', 'tiktokindia', 'bollywood',
+    'pakistan', 'bangla', 'tamil', 'telugu', 'punjabi', 'urdu', 'kerala',
+    'marathi', 'gujarati', 'indonesia', 'vietnam', 'philippines', 'tagalog',
+    'arabic', 'dubai', 'saudi', 'egypt', 'morocco', 'iraq', 'syria'
+}
+
+# Запрещенные регионы
+BLOCKED_REGIONS = {
+    'IN', 'PK', 'BD', 'NP', 'LK', 'VN', 'TH', 'ID', 'PH', 'MY',
+    'SA', 'AE', 'EG', 'IQ', 'SY', 'MA', 'DZ', 'TN', 'NG', 'KE', 'GH'
+}
+
+def is_quality_cis_video(data: dict) -> bool:
+    """
+    Проверяет видео на соответствие региону Беларусь/СНГ и отфильтровывает
+    зарубежный спам (Индия, Азия, арабские страны и т.д.).
+    """
+    if not isinstance(data, dict):
+        return False
+
+    region = (
+        data.get("region") or 
+        data.get("countryCode") or 
+        data.get("locationCreated") or 
+        ""
+    ).upper()
+    if region in BLOCKED_REGIONS:
+        return False
+
+    title = str(data.get("desc") or data.get("title") or "")
+    author = data.get("author") or {}
+    if isinstance(author, dict):
+        uname = author.get("uniqueId") or author.get("unique_id") or ""
+        nick = author.get("nickname") or uname
+    else:
+        nick = str(author)
+        uname = str(author)
+
+    music = data.get("music") or data.get("music_info") or {}
+    if isinstance(music, dict):
+        music_title = music.get("title") or ""
+    else:
+        music_title = str(music or "")
+
+    full_text = f"{title} {nick} {music_title}".strip()
+
+    # 1. Жесткий бан восточных алфавитов
+    if FOREIGN_SCRIPTS_RE.search(full_text):
+        return False
+
+    low = full_text.lower()
+
+    # 2. Стоп-слова зарубежного мусора
+    for bad in NON_CIS_BAD_KEYWORDS:
+        if bad in low:
+            return False
+
+    # 3. Приоритет кириллицы (русский / белорусский контент)
+    if CYRILLIC_RE.search(full_text):
+        return True
+
+    # 4. Если кириллицы нет (например на английском), проверяем ключевые слова Беларуси и СНГ
+    for kw in ["belarus", "minsk", "gomel", "brest", "grodno", "vitebsk", "mogilev", "cis"]:
+        if kw in low:
+            return True
+
+    return False
 
 # Очередь предзагруженных рекомендаций из ленты
 _rec_feed_queue = []
@@ -190,8 +280,15 @@ async def browser_tiktok_auth(event: events.NewMessage.Event):
                     headless=False,
                     user_agent=USER_AGENT,
                     viewport={"width": 1280, "height": 850},
+                    locale=BELARUS_LOCALE,
+                    timezone_id=BELARUS_TIMEZONE,
+                    geolocation=BELARUS_COORDINATES,
+                    permissions=["geolocation"],
+                    extra_http_headers={
+                        "Accept-Language": "ru-RU,ru;q=0.9,be-BY;q=0.8,be;q=0.7,en-US;q=0.5,en;q=0.3"
+                    },
                     ignore_default_args=BROWSER_IGNORE_DEFAULT_ARGS,
-                    args=BROWSER_ARGS
+                    args=BROWSER_ARGS + ["--lang=ru-RU,ru"]
                 )
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 await page.add_init_script(STEALTH_JS)
@@ -260,8 +357,8 @@ async def browser_tiktok_auth(event: events.NewMessage.Event):
 
 async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
     """
-    Запускает headless Chromium с обходом антибота (Stealth),
-    открывает tiktok.com/foryou или explore под сохраненным профилем
+    Запускает headless Chromium с обходом антибота (Stealth) с локалью Беларуси,
+    открывает tiktok.com/foryou или проверенные региональные теги СНГ под сохраненным профилем
     и перехватывает свежую ленту рекомендаций с нативными данными.
     """
     if not PLAYWRIGHT_AVAILABLE:
@@ -278,15 +375,34 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                     headless=True,
                     user_agent=USER_AGENT,
                     viewport={"width": 1280, "height": 850},
+                    locale=BELARUS_LOCALE,
+                    timezone_id=BELARUS_TIMEZONE,
+                    geolocation=BELARUS_COORDINATES,
+                    permissions=["geolocation"],
+                    extra_http_headers={
+                        "Accept-Language": "ru-RU,ru;q=0.9,be-BY;q=0.8,be;q=0.7,en-US;q=0.5,en;q=0.3"
+                    },
                     ignore_default_args=BROWSER_IGNORE_DEFAULT_ARGS,
-                    args=BROWSER_ARGS
+                    args=BROWSER_ARGS + ["--lang=ru-RU,ru"]
                 )
+
+                # Куки для жесткой фиксации региона Беларуси
+                try:
+                    await ctx.add_cookies([
+                        {"name": "store-country-code", "value": "by", "domain": ".tiktok.com", "path": "/"},
+                        {"name": "store-country-code-src", "value": "did", "domain": ".tiktok.com", "path": "/"},
+                        {"name": "my_region", "value": "BY", "domain": ".tiktok.com", "path": "/"},
+                        {"name": "tt_chain_token", "value": "by", "domain": ".tiktok.com", "path": "/"},
+                    ])
+                except Exception:
+                    pass
+
                 page = ctx.pages[0] if ctx.pages else await ctx.new_page()
                 await page.add_init_script(STEALTH_JS)
 
                 async def handle_response(resp):
                     url = resp.url
-                    if any(k in url for k in ["/api/recommend/item_list", "/api/explore/item_list", "/api/item/list", "/api/post/item_list", "/api/preload/item_list", "item_list"]):
+                    if any(k in url for k in ["/api/recommend/item_list", "/api/explore/item_list", "/api/item/list", "/api/post/item_list", "/api/preload/item_list", "/api/challenge/item_list", "item_list"]):
                         try:
                             res = await resp.json()
                             items = res.get("itemList") or res.get("data") or []
@@ -294,8 +410,13 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
                                 for it in items:
                                     if not isinstance(it, dict):
                                         continue
+
+                                    # Строгая фильтрация: отсекаем весь иностранный/индийский мусор
+                                    if not is_quality_cis_video(it):
+                                        continue
+
                                     v_id = str(it.get("id") or it.get("video_id") or "")
-                                    if not v_id or v_id in seen_ids:
+                                    if not v_id or v_id in seen_ids or v_id in _seen_video_ids:
                                         continue
                                     seen_ids.add(v_id)
 
@@ -336,52 +457,76 @@ async def fetch_tiktok_recommendations_browser(count: int = 15) -> list:
 
                 page.on("response", handle_response)
 
-                # 1. Быстрый переход к персональным рекомендациям (For You)
+                # 1. Переход к персональным рекомендациям (For You) с локалью Беларуси
                 try:
-                    await page.goto("https://www.tiktok.com/foryou", wait_until="commit", timeout=12000)
+                    await page.goto("https://www.tiktok.com/foryou?lang=ru-RU", wait_until="commit", timeout=12000)
                 except Exception:
                     pass
 
-                # Скроллим и ждем появления видео (быстрые тики по 0.6 сек)
-                for _ in range(5):
-                    if len(videos) >= 5:
+                # Скроллим и ждем появления качественных видео
+                for _ in range(6):
+                    if len(videos) >= count:
                         break
-                    await asyncio.sleep(0.6)
+                    await asyncio.sleep(0.7)
                     try:
-                        await page.mouse.wheel(0, 800)
+                        await page.mouse.wheel(0, 900)
                     except Exception:
                         pass
 
-                # 2. Если For You пуст или заблокирован, пробуем Explore
-                if not videos:
-                    try:
-                        await page.goto("https://www.tiktok.com/explore", wait_until="commit", timeout=10000)
-                        for _ in range(4):
-                            if len(videos) >= 4:
-                                break
-                            await asyncio.sleep(0.6)
-                            try:
-                                await page.mouse.wheel(0, 800)
-                            except Exception:
-                                pass
-                    except Exception:
-                        pass
+                # 2. Если в For You мало видео из Беларуси/СНГ, подгружаем региональные теги
+                if len(videos) < count:
+                    regional_tags = [
+                        "%D0%B1%D0%B5%D0%BB%D0%B0%D1%80%D1%83%D1%81%D1%8C",          # беларусь
+                        "%D0%BC%D0%B8%D0%BD%D1%81%D0%BA",              # минск
+                        "%D0%B2%D1%80%D0%B5%D0%BA",                    # врек
+                        "%D1%80%D0%B5%D0%BA%D0%BE%D0%BC%D0%B5%D0%BD%D0%B4%D0%B0%D1%86%D0%B8%D0%B8", # рекомендации
+                        "%D0%B6%D0%B8%D0%B7%D0%B0",                    # жиза
+                        "%D0%BC%D0%B5%D0%BC%D1%8B"                     # мемы
+                    ]
+                    random.shuffle(regional_tags)
+                    for tag in regional_tags:
+                        if len(videos) >= count:
+                            break
+                        try:
+                            tag_url = f"https://www.tiktok.com/tag/{tag}?lang=ru-RU"
+                            await page.goto(tag_url, wait_until="commit", timeout=10000)
+                            for _ in range(4):
+                                if len(videos) >= count:
+                                    break
+                                await asyncio.sleep(0.6)
+                                try:
+                                    await page.mouse.wheel(0, 900)
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
 
                 # 3. Резервный DOM-сборщик ссылок со страницы
                 if not videos:
                     try:
                         links = await page.locator('a[href*="/video/"]').all()
-                        for link in links[:count]:
+                        for link in links[:count * 2]:
+                            if len(videos) >= count:
+                                break
                             href = await link.get_attribute("href")
                             if href and "/video/" in href:
                                 v_id = href.split("/video/")[-1].split("?")[0]
                                 parts = href.split("/video/")[0].split("/@")
                                 uname = parts[-1] if len(parts) > 1 else ""
-                                if v_id and v_id not in seen_ids:
+
+                                try:
+                                    card_text = await link.inner_text()
+                                except Exception:
+                                    card_text = ""
+
+                                if card_text and not is_quality_cis_video({"desc": card_text, "author": uname}):
+                                    continue
+
+                                if v_id and v_id not in seen_ids and v_id not in _seen_video_ids:
                                     seen_ids.add(v_id)
                                     videos.append({
                                         "video_id": v_id,
-                                        "title": "",
+                                        "title": card_text[:150] if card_text else "",
                                         "author": uname,
                                         "author_name": uname,
                                         "duration": 0,
@@ -583,7 +728,7 @@ async def fetch_tiktok_recommendations_http(sessionid: str = "") -> list:
         "browser_name=Mozilla&browser_online=true&browser_platform=Win32&"
         "channel=tiktok_web&cookie_enabled=true&count=16&device_id=7382910384910293847&"
         "focus_state=true&from_page=fyp&history_len=0&is_fullscreen=false&"
-        "is_page_visible=true&os=windows&priority_region=&region=PL&tz_name=Europe%2FWarsaw"
+        "is_page_visible=true&os=windows&priority_region=BY&region=BY&tz_name=Europe%2FMinsk"
     )
 
     videos = []
@@ -596,6 +741,8 @@ async def fetch_tiktok_recommendations_http(sessionid: str = "") -> list:
                     items = data.get("itemList", [])
                     if isinstance(items, list) and items:
                         for it in items:
+                            if not is_quality_cis_video(it):
+                                continue
                             v_id = str(it.get("id", ""))
                             author = it.get("author", {})
                             video_info = it.get("video", {})
@@ -622,13 +769,15 @@ async def fetch_tiktok_recommendations_http(sessionid: str = "") -> list:
     # TikWM Trending API (если аккаунт не дал фид)
     try:
         async with aiohttp.ClientSession() as session:
-            for reg in ["US", "DE", "PL"]:
+            for reg in ["BY", "KZ", "RU"]:
                 params = {"region": reg, "count": 15}
                 async with session.get(TIKWM_FEED_API, params=params, headers=HEADERS, timeout=REQUEST_TIMEOUT) as resp:
                     if resp.status == 200:
                         res = await resp.json(content_type=None)
                         if res.get("code") == 0 and res.get("data"):
                             for item in res["data"]:
+                                if not is_quality_cis_video(item):
+                                    continue
                                 author = item.get("author", {})
                                 v_id = str(item.get("video_id", item.get("id", "")))
                                 uname = author.get("unique_id", "") if isinstance(author, dict) else ""
@@ -780,11 +929,14 @@ async def download_tiktok_by_url(tiktok_url: str) -> tuple[bytes | None, dict]:
 
 async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
     """
-    Возвращает следующее видео из ленты рекомендаций пользователя.
+    Возвращает следующее видео из ленты рекомендаций пользователя (Беларусь/СНГ).
     Использует кэшированную очередь, пополняя её через браузер Playwright.
     Если скачивание одного видео не удается, пробует следующее из очереди.
     """
     global _rec_feed_queue, _seen_video_ids
+
+    # Очищаем очередь от любых не-СНГ/иностранных элементов
+    _rec_feed_queue = [v for v in _rec_feed_queue if is_quality_cis_video(v)]
 
     # Пополняем очередь, если пусто
     if not _rec_feed_queue:
@@ -792,10 +944,12 @@ async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
         if not new_batch:
             new_batch = await fetch_tiktok_recommendations_http()
 
-        fresh = [v for v in new_batch if v.get("video_id") not in _seen_video_ids]
-        if not fresh and new_batch:
+        # Строгая фильтрация (Беларусь и СНГ контент)
+        filtered = [v for v in new_batch if is_quality_cis_video(v)]
+        fresh = [v for v in filtered if v.get("video_id") not in _seen_video_ids]
+        if not fresh and filtered:
             _seen_video_ids.clear()
-            fresh = new_batch
+            fresh = filtered
         if fresh:
             _rec_feed_queue.extend(fresh)
 
@@ -805,6 +959,8 @@ async def get_next_recommendation_video() -> tuple[bytes | None, dict]:
     # Перебираем очередь, пока не найдем успешно скачанное видео
     while _rec_feed_queue:
         chosen = _rec_feed_queue.pop(0)
+        if not is_quality_cis_video(chosen):
+            continue
         v_id = chosen.get("video_id", "")
         if v_id:
             _seen_video_ids.add(v_id)
@@ -836,7 +992,7 @@ def _format_caption(meta: dict, elapsed: float, is_fyp: bool = False) -> str:
     """Форматирует красивый текст для сообщения."""
     parts = []
 
-    badge = "🎬 **Видео из TikTok**"
+    badge = "🎬 **Рекомендации TikTok (Беларусь/СНГ)**" if is_fyp else "🎬 **Видео из TikTok**"
     if meta.get("author"):
         profile_url = f"https://www.tiktok.com/@{meta['author']}"
         author_display = meta.get("author_name") or meta["author"]
