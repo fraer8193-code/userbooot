@@ -4,7 +4,7 @@ import subprocess
 import logging
 from pathlib import Path
 
-# Обеспечиваем немедленный вывод логов в консоль Docker/Bothost без буферизации
+# Обеспечиваем немедленный вывод логов в консоль Docker/хостинга без буферизации
 os.environ["PYTHONUNBUFFERED"] = "1"
 if sys.platform == "win32":
     try:
@@ -19,7 +19,7 @@ else:
     except Exception:
         pass
 
-# --- Функция авто-проверки и установки зависимостей для Bothost.ru и локального ПК ---
+# --- Функция авто-проверки и установки зависимостей (любой хостинг или локальный ПК) ---
 def ensure_dependencies():
     packages = {
         "telethon": "telethon",
@@ -29,24 +29,30 @@ def ensure_dependencies():
         "PIL": "pillow",
         "google.genai": "google-genai",
         "openai": "openai",
-        "requests": "requests"
+        "requests": "requests",
+        "pydantic": "pydantic",
+        "yt_dlp": "yt-dlp",
+        "playwright": "playwright"
     }
     missing_pip = []
-    
+
     for import_name, pip_spec in packages.items():
         try:
             __import__(import_name)
         except ImportError:
             missing_pip.append(pip_spec)
-            
+
+    if not missing_pip:
+        print("[+] [Deps] Все зависимости уже установлены. OK!\n")
+
     if missing_pip:
-        print(f"[*] [Bothost.ru] Missing dependencies detected: {', '.join(missing_pip)}")
-        
+        print(f"[*] [Deps] Отсутствуют зависимости: {', '.join(missing_pip)}")
+
         # 1. Проверяем наличие pip, если нет — устанавливаем автоматически
         try:
             subprocess.check_call([sys.executable, "-m", "pip", "--version"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except Exception:
-            print("[*] [Bothost.ru] pip is missing in container. Bootstrapping pip...")
+            print("[*] [Deps] pip не найден в окружении. Устанавливаю pip...")
             try:
                 import ensurepip
                 ensurepip.bootstrap()
@@ -58,10 +64,10 @@ def ensure_dependencies():
                     urllib.request.urlretrieve("https://bootstrap.pypa.io/get-pip.py", get_pip_file)
                     subprocess.check_call([sys.executable, get_pip_file, "--no-warn-script-location"])
                 except Exception as e:
-                    print(f"[!] [Bothost.ru] Could not bootstrap pip: {e}")
+                    print(f"[!] [Deps] Не удалось установить pip: {e}")
 
         # 2. Устанавливаем зависимости
-        print("[*] [Bothost.ru] Installing dependencies automatically via pip...")
+        print("[*] [Deps] Устанавливаю зависимости автоматически через pip...")
         try:
             req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
             install_cmd = [sys.executable, "-m", "pip", "install", "--no-cache-dir"]
@@ -69,13 +75,13 @@ def ensure_dependencies():
                 subprocess.check_call(install_cmd + ["-r", req_file])
             else:
                 subprocess.check_call(install_cmd + missing_pip)
-            print("[+] [Bothost.ru] All dependencies installed successfully!\n")
-            
+            print("[+] [Deps] Все зависимости успешно установлены!\n")
+
             import site
             import importlib
             importlib.invalidate_caches()
         except Exception as e:
-            print(f"[!] [Bothost.ru] Warning during pip install: {e}")
+            print(f"[!] [Deps] Предупреждение при установке через pip: {e}")
 
 ensure_dependencies()
 

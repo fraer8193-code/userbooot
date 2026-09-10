@@ -155,7 +155,7 @@ async def keepalive_cmd(event: events.NewMessage.Event):
         f"• **Интервал дёрганья:** `каждые 5 минут`\n"
         f"• **Отправлено импульсов:** `{_heartbeat_count}`\n"
         f"• **Аптайм бота:** `{get_uptime()}`\n"
-        f"• **Веб-порт:** `{PORT}` (для Render, Railway, Bothost)\n"
+        f"• **Веб-порт:** `{PORT}` (для Render, Railway и других хостингов)\n"
         f"• **HTTP эндпоинты:** `/` и `/ping`\n\n"
         f"💡 Команда `{CMD_PREFIX}keepalive ping` — отправить пинг прямо сейчас."
     )

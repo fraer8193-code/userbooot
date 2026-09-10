@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Bothost.ru Auto-startup Script
-echo "[*] Checking Python dependencies for Bothost.ru..."
+# Auto-startup Script (любой хостинг или локальный ПК)
+echo "[*] Checking Python dependencies..."
 python3 -m pip install --upgrade pip
 python3 -m pip install -r requirements.txt
 
