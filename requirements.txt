@@ -8,3 +8,4 @@ pydantic
 yt-dlp
 openai
 google-genai
+playwright

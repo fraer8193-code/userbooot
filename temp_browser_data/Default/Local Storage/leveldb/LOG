@@ -1,0 +1,18 @@
+2026/09/11-08:57:29.502 33f4 Reusing MANIFEST C:\userbotik\hyila\temp_browser_data\Default\Local Storage\leveldb/MANIFEST-000001
+2026/09/11-08:57:29.505 33f4 Recovering log #104
+2026/09/11-08:57:29.506 33f4 Level-0 table #106: started
+2026/09/11-08:57:29.511 33f4 Level-0 table #106: 18651 bytes OK
+2026/09/11-08:57:29.512 33f4 Recovering log #106
+2026/09/11-08:57:29.512 33f4 Level-0 table #107: started
+2026/09/11-08:57:29.517 33f4 Level-0 table #107: 46842 bytes OK
+2026/09/11-08:57:29.520 33f4 Delete type=0 #104
+2026/09/11-08:57:29.520 33f4 Delete type=0 #106
+2026/09/11-08:57:29.521 91c Compacting 4@0 + 1@1 files
+2026/09/11-08:57:29.551 91c Generated table #109@0: 81 keys, 1618867 bytes
+2026/09/11-08:57:29.551 91c Compacted 4@0 + 1@1 files => 1618867 bytes
+2026/09/11-08:57:29.552 91c compacted to: files[ 0 1 0 0 0 0 0 ]
+2026/09/11-08:57:29.553 91c Delete type=2 #98
+2026/09/11-08:57:29.553 91c Delete type=2 #100
+2026/09/11-08:57:29.553 91c Delete type=2 #103
+2026/09/11-08:57:29.553 91c Delete type=2 #106
+2026/09/11-08:57:29.553 91c Delete type=2 #107

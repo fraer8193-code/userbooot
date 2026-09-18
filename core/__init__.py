@@ -16,4 +16,6 @@ def command(name: str, description: str = "", usage: str = ""):
         return func
     return decorator
 
-__all__ = ["ModuleManager", "module_manager", "bot_client", "command", "get_uptime", "format_ping", "START_TIME"]
+from config import CMD_PREFIX
+
+__all__ = ["ModuleManager", "module_manager", "bot_client", "command", "get_uptime", "format_ping", "START_TIME", "CMD_PREFIX"]

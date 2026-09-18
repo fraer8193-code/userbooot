@@ -1,0 +1,9 @@
+{
+    "enabled": true,
+    "current_country": "pl",
+    "custom_lat": 51.101235,
+    "custom_long": 17.009412,
+    "use_custom": false,
+    "live_drift_enabled": true,
+    "drift_speed_meters": 15
+}

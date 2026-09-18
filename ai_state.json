@@ -1,0 +1,8 @@
+{
+  "auto_reply": false,
+  "public_mode": false,
+  "censorship": true,
+  "current_mode": "default",
+  "current_model": "gemini-3.5-flash-lite",
+  "model": "gemini-3.5-flash-lite"
+}

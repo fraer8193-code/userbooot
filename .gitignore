@@ -10,28 +10,11 @@ __pycache__/
 *$py.class
 *.so
 
-# СЕССИИ TELEGRAM И СЕКРЕТЫ
-*.session
-*.session-journal
-.env
+# СЕССИИ TELEGRAM (сессия юзербота скрыта)
+userbot_session.session
+userbot_session.session-journal
+userbot_session*
 .restart_state
-
-# Куки и кэш авторизаций
-*_cookies.txt
-*cookies*.txt
-tiktok_session.json
-tiktok_seen.json
-temp_browser_data/
-temp_media/
-
-# Личные дампы переписок и состояния
-result.json
-afk_state.json
-ai_state.json
-dmess_state.json
-geo_settings.json
-autotime_settings.json
-muted_users.json
 
 # IDE и системные файлы
 .vscode/

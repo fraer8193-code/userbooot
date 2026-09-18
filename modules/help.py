@@ -62,6 +62,7 @@ async def help_cmd(event: events.NewMessage.Event):
         "autotime": "🕐 **Auto Time / Время**",
         "keepalive": "💓 **KeepAlive / 24/7**",
         "soo": "📊 **Stats & Counter**",
+        "minedrop": "⛏️ **MineDrop Auto-Promo**",
         "help": "🌸 **General**"
     }
 

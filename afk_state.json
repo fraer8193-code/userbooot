@@ -1,0 +1,13 @@
+{
+  "is_afk": false,
+  "reason": "отошел",
+  "since": 0,
+  "mode": "aiafk",
+  "group_replies": true,
+  "auto_unafk": true,
+  "total_replies": 1,
+  "replied_users": {
+    "7469883317": 1
+  },
+  "ainoo_users": {}
+}

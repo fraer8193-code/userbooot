@@ -1,0 +1,22 @@
+[
+  {
+    "name": "minedrop_online_visitor",
+    "value": "yrsLba1u-XG9FPgn-q2Qugc6.3875cd7f3a5a3196d8af2b266b855b311759a8a60a25aff3d80df0378c517af9",
+    "domain": "minedrop.art",
+    "path": "/",
+    "expires": 1792332986.993261,
+    "httpOnly": true,
+    "secure": false,
+    "sameSite": "Lax"
+  },
+  {
+    "name": "connect.sid",
+    "value": "s%3AvkoDCAZOLIQyC2qUaDkiwnFplUBajslg.ThFgRkOmjw7RLgeqEFDv1upoy2OLXh8tf6XJ4LgP5pM",
+    "domain": "minedrop.art",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": true,
+    "secure": false,
+    "sameSite": "Lax"
+  }
+]
